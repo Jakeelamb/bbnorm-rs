@@ -1,0 +1,12 @@
+[package]
+name = "bbnorm-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0"
+flate2 = { version = "1.0", default-features = false, features = ["zlib-rs"] }
+gzp = { version = "2.0.2", default-features = false, features = ["deflate_rust"] }
+rayon = "1"
+rustc-hash = "2.1"
+tempfile = "3.10"
