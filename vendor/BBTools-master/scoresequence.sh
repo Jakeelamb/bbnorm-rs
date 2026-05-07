@@ -1,0 +1,82 @@
+#!/bin/bash
+
+usage(){
+echo "
+Written by Brian Bushnell
+Last modified Oct 11, 2023
+
+Description:  Scores sequences using a neural network.  Only the initial Xbp
+are used, for sequences longer than the network size.
+
+Usage:  scoresequence.sh in=<sequences> out=<renamed sequences> net=<net file>
+
+Input may be fasta or fastq, compressed or uncompressed.
+
+Standard parameters:
+in=<file>       Sequence data.
+out=<file>      Sequences renamed with their scores.
+net=<file>      Network file to apply to the sequences.
+hist=<file>     Histogram of scores (x100, so 0-1 maps to 0-100).
+overwrite=f     (ow) Set to false to force the program to abort rather than
+                overwrite an existing file.
+
+Processing parameters:
+rcomp=f         Use the max score of a sequence and its reverse complement.
+parse=f         Parse sequence headers for 'result=' to determine whether
+                they are positive or negative examples.
+annotate=t      Rename output reads by appending 'score='.
+filter=f        Retain only reads above or below a cutoff.  Setting the cutoff
+                or highpass flag will automatically set this to true.
+cutoff=0.5      Score cutoff for filtering; scores mostly range from 0 to 1.
+highpass=t      Retain sequences ABOVE cutoff if true, else BELOW cutoff.
+
+Java Parameters:
+-Xmx            This will set Java's memory usage, overriding autodetection.
+                -Xmx20g will specify 20 gigs of RAM, and -Xmx200m will
+                specify 200 megs. The max is typically 85% of physical memory.
+-eoom           This flag will cause the process to exit if an out-of-memory
+                exception occurs.  Requires Java 8u92+.
+-da             Disable assertions.
+
+Please contact Brian Bushnell at bbushnell@lbl.gov if you encounter any problems.
+For documentation and the latest version, visit: https://bbmap.org
+"
+}
+
+if [ -z "$1" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+	usage
+	exit
+fi
+
+resolveSymlinks(){
+	SCRIPT="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+	while [ -h "$SCRIPT" ]; do
+		DIR="$(dirname "$SCRIPT")"
+		SCRIPT="$(readlink "$SCRIPT")"
+		[ "${SCRIPT#/}" = "$SCRIPT" ] && SCRIPT="$DIR/$SCRIPT"
+	done
+	DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+	if [ -f "$DIR/bbtools.jar" ]; then
+		CP="$DIR/bbtools.jar"
+	else
+		CP="$DIR/current/"
+	fi
+}
+
+setEnv(){
+	. "$DIR/javasetup.sh"
+	. "$DIR/memdetect.sh"
+
+	parseJavaArgs "--xmx=1g" "--xms=1g" "--mode=fixed" "$@"
+	setEnvironment
+}
+
+launch() {
+	CMD="java $EA $EOOM $SIMD $XMX $XMS -cp $CP ml.ScoreSequence $@"
+	echo "$CMD" >&2
+	eval $CMD
+}
+
+resolveSymlinks
+setEnv "$@"
+launch "$@"

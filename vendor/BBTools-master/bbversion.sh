@@ -1,0 +1,51 @@
+#!/bin/bash
+
+usage(){
+echo "
+Written by Brian Bushnell
+Last modified November 19, 2025
+
+Description:  Prints the BBTools version number.
+Add an argument to print the version name too.
+
+Usage:  bbversion.sh
+"
+}
+
+if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+	usage
+	exit
+fi
+
+resolveSymlinks(){
+	SCRIPT="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+	while [ -h "$SCRIPT" ]; do
+		DIR="$(dirname "$SCRIPT")"
+		SCRIPT="$(readlink "$SCRIPT")"
+		[ "${SCRIPT#/}" = "$SCRIPT" ] && SCRIPT="$DIR/$SCRIPT"
+	done
+	DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+	if [ -f "$DIR/bbtools.jar" ]; then
+		CP="$DIR/bbtools.jar"
+	else
+		CP="$DIR/current/"
+	fi
+}
+
+setEnv(){
+	. "$DIR/javasetup.sh"
+	. "$DIR/memdetect.sh"
+
+	parseJavaArgs "--xmx=80m" "--xms=80m" "--mode=fixed" "$@"
+	setEnvironment
+}
+
+launch() {
+	CMD="java $EA $EOOM $XMX $XMS -cp $CP driver.BBVersion $@"
+	#echo "$CMD" >&2
+	eval $CMD
+}
+
+resolveSymlinks
+setEnv "$@"
+launch "$@"

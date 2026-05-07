@@ -1,0 +1,137 @@
+#!/bin/bash
+
+usage(){
+echo "
+Written by Brian Bushnell
+Last modified October 12, 2025
+
+Description:  Assigns taxonomy to query sequences by comparing kmer
+frequencies to those in a reference database.  Developed for taxonomic
+assignment of metagenomic bins, but it can also run on a per-sequence basis.
+QuickClade is extremely fast and uses little memory.  However, the accuracy
+declines for incomplete genomes.  The recommended minimum sequence length
+is not yet known, but lower values of k5dif are more likely to be correct
+to a lower taxonomic level.  k5dif represents the sum of the absolute values
+of the differences between the 5-mer frequency spectra, so the range is 0-1.
+Because no marker genes are used, QuickClade should perform similarly for any
+clade in the reference dataset.
+While the default reference is taxonomically labeled, you can use whatever
+you want as a reference, with or without taxonomic labels.
+
+Usage Examples:
+quickclade.sh query1.fa query2.fa query3.fa
+or
+quickclade.sh bins
+or
+quickclade.sh contigs.fa percontig out=results.tsv usetree
+
+For accuracy evaluation:
+quickclade.sh printmetrics usetree genomesdir out=null includeself=f
+
+
+File Parameters:
+in=<file,file>  Query files or directories.  Loose file or directory names are
+                also permitted.  Input can be fasta, fastq, or spectra files;
+                spectra files are made by cladeloader.sh.
+ref=<file,file> Reference files; the current default is:
+                /clusterfs/jgi/groups/gentech/homes/bbushnell/clade/refseq_main.spectra.gz
+                It is plaintext, human-readable, and pretty small.
+out=stdout      Set to a file to redirect output.  Only the query results will
+                be written here; progress messages will still go to stderr.
+server          Use this flag to send kmer spectra to a remote server if you do not
+                have a local database.
+
+Basic Parameters:
+percontig       Run one query per contig instead of per file.
+minlen=0        Ignore sequences shorter than this in percontig mode.
+hits=1          Print this many top hits per query.
+steps=6         Only search up to this many GC intervals (of 0.01) away from
+                the query GC.
+oneline         Print results one line per query, tab-delimited.
+callssu=t       Call 16S and 18S for alignment to reference SSU.
+                This will affect the top hit ordering only if hits>1.
+server=f        Send spectra to server instead of using a local reference.
+                Enabled automatically if there is no local reference.
+
+Proxy Parameters:
+proxyhost=<addr>  HTTPS proxy hostname for environments requiring a proxy
+                to reach external servers.  Sets -Dhttps.proxyHost for Java.
+proxyport=<num>   HTTPS proxy port number.  Sets -Dhttps.proxyPort for Java.
+
+Advanced Parameters (mainly for benchmarking):
+printmetrics    Output accuracy statistics; mainly useful for labeled data.
+                Labeled data should have 'tid_1234' or similar in the header.
+                Works best with 'usetree'.
+printqtid       Print query TaxID.
+banself         Ignore records with the same TaxID as the query.  Makes the
+                program behave like that organism is not in the reference.
+simd            Use vector instructions to accelerate comparisons.
+maxk=5          Can be set to 4 or 3 to restrict kmer frequency comparisons
+                to smaller kmers.  This may improve accuracy for small
+                sequences/bins, but slightly reduces accuracy for large
+                sequences/bins.
+ccm=1.2         Threshold for using pentamers; lower is faster.
+ccm2=1.6        Threshold for using tetramers.
+gcdif=0.04      Initial maximum GC difference.
+gcmult=0.5      Max GC difference as a fraction of best 5-mer difference.
+strdif=0.12     Initial maximum strandedness difference.
+strmult=1.2     Max strandedness difference as a fraction of best 5-mer diff.
+hhdif=0.025     Maximum HH metric difference.
+cagadif=0.017   Maximum CAGA metric differece.
+ee=t            Early exit; increases speed.
+entropy         Calculate entropy for queries.  Slow; negligible utility.
+heap=1          Number of intermediate comparisons to store.
+usetree         Load a taxonomic tree for better grading for labeled data.
+aligner=quantum Options include ssa2, glocal, drifting, banded, crosscut.
+
+Distance Metrics:
+abs             Use absolute difference of kmer frequencies.
+cos             Use 1-cosine similarity of kmer frequencies.
+euc             Use Euclidian distance.
+hel             Use Hellinger distance.
+abscomp         GC-compensated version of abs (default).
+Note:  The distance metric strongly impacts ccm, gcmult, and strmult.
+       Defaults are optimized for abscomp.
+
+Please contact Brian Bushnell at bbushnell@lbl.gov if you encounter any problems.
+For documentation and the latest version, visit: https://bbmap.org
+"
+}
+
+if [ -z "$1" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+	usage
+	exit
+fi
+
+resolveSymlinks(){
+	SCRIPT="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+	while [ -h "$SCRIPT" ]; do
+		DIR="$(dirname "$SCRIPT")"
+		SCRIPT="$(readlink "$SCRIPT")"
+		[ "${SCRIPT#/}" = "$SCRIPT" ] && SCRIPT="$DIR/$SCRIPT"
+	done
+	DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+	if [ -f "$DIR/bbtools.jar" ]; then
+		CP="$DIR/bbtools.jar"
+	else
+		CP="$DIR/current/"
+	fi
+}
+
+setEnv(){
+	. "$DIR/javasetup.sh"
+	. "$DIR/memdetect.sh"
+
+	parseJavaArgs "--xmx=4g" "--xms=4g" "--mode=fixed" "$@"
+	setEnvironment
+}
+
+launch() {
+	CMD="java $EA $EOOM $SIMD $PROXY $XMX $XMS -cp $CP clade.CladeSearcher $@"
+	echo "$CMD" >&2
+	eval $CMD
+}
+
+resolveSymlinks
+setEnv "$@"
+launch "$@"

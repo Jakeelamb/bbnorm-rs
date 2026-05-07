@@ -1,0 +1,121 @@
+package jgi;
+
+import java.io.PrintStream;
+
+import fileIO.ByteFile;
+import fileIO.FileFormat;
+import fileIO.TextStreamWriter;
+import parse.LineParser1;
+import parse.PreParser;
+import shared.Shared;
+import shared.Timer;
+import shared.Tools;
+import stream.SamLine;
+
+/**
+ * Splits SAM alignment files into four categories based on mapping properties.
+ * Separates reads into plus strand, minus strand, chimeric, and unmapped files.
+ * Processes paired-end alignments and categorizes based on strand orientation
+ * and mapping status.
+ *
+ * @author Brian Bushnell
+ * @date Jul 23, 2013
+ */
+public class SplitSam4Way {
+	
+	public static void main(String[] args){
+		SplitSam4Way x=new SplitSam4Way(args);
+		
+		//Close the print stream if it was redirected
+		Shared.closeStream(x.outstream);
+	}
+	
+	private void printOptions(){
+		outstream.println("Syntax:\n");
+		outstream.println("java -ea -Xmx128m -cp <path> jgi.SplitSam4Way <input> <out plus> <out minus> <out chimeric> <out unmapped>");
+		outstream.println("If you do not want one of the output files, use the word 'null'.\n");
+	}
+	
+	public SplitSam4Way(String[] args){
+		
+		{//Preparse block for help, config files, and outstream
+			PreParser pp=new PreParser(args, getClass(), false);
+			args=pp.args;
+			outstream=pp.outstream;
+		}
+		
+		if(args==null || args.length!=5){
+			printOptions();
+			System.exit(1);
+		}
+		
+		Timer t=new Timer();
+		long reads=0, bases=0;
+		long preads=0, mreads=0, creads=0, ureads=0;
+		
+		String fin=args[0];
+		String fplus=args[1];
+		String fminus=args[2];
+		String fchimeric=args[3];
+		String funmapped=args[4];
+
+		ByteFile tf=ByteFile.makeByteFile(fin, true);
+		LineParser1 lp=new LineParser1('\t');
+		TextStreamWriter plus=("null".equalsIgnoreCase(fplus) ? null : new TextStreamWriter(fplus, true, false, true, FileFormat.SAM));
+		TextStreamWriter minus=("null".equalsIgnoreCase(fminus) ? null : new TextStreamWriter(fminus, true, false, true, FileFormat.SAM));
+		TextStreamWriter chimeric=("null".equalsIgnoreCase(fchimeric) ? null : new TextStreamWriter(fchimeric, true, false, true, FileFormat.SAM));
+		TextStreamWriter unmapped=("null".equalsIgnoreCase(funmapped) ? null : new TextStreamWriter(funmapped, true, false, true, FileFormat.SAM));
+
+		if(plus!=null){plus.start();}
+		if(minus!=null){minus.start();}
+		if(chimeric!=null){chimeric.start();}
+		if(unmapped!=null){unmapped.start();}
+		
+		for(byte[] bytes=tf.nextLine(); bytes!=null; bytes=tf.nextLine()){
+			if(bytes[0]=='@'){
+				if(plus!=null){plus.println(bytes);}
+				if(minus!=null){minus.println(bytes);}
+				if(chimeric!=null){chimeric.println(bytes);}
+				if(unmapped!=null){unmapped.println(bytes);}
+			}else{
+				SamLine sl=new SamLine(lp.set(bytes));
+				reads++;
+//				bases+=sl.seq.length();
+				bases+=sl.seq.length;
+				
+				if(!sl.mapped() || !sl.nextMapped() || !sl.hasMate() || !sl.primary()){
+					if(unmapped!=null){unmapped.println(bytes);}
+					ureads++;
+//					System.out.println("unmapped: "+sl.mapped()+", "+sl.nextMapped()+", "+sl.hasMate()+", "+!sl.primary());
+				}else if(!sl.pairedOnSameChrom() || sl.strand()==sl.nextStrand()){
+					if(chimeric!=null){chimeric.println(bytes);}
+					creads++;
+//					System.out.println("chimeric: "+sl.pairedOnSameChrom()+", "+(sl.strand()==sl.nextStrand())+", "+sl.strand()+", "+sl.nextStrand()+", "+new String(sl.rname())+", "+new String(sl.rnext()));
+				}else if((sl.firstFragment() ? sl.strand() : sl.nextStrand())==Shared.PLUS){
+					if(plus!=null){plus.println(bytes);}
+					preads++;
+				}else if((sl.firstFragment() ? sl.strand() : sl.nextStrand())==Shared.MINUS){
+					if(minus!=null){minus.println(bytes);}
+					mreads++;
+				}else{
+					throw new RuntimeException("Unhandled case: "+sl.firstFragment()+", "+sl.lastFragment()+", "+sl.strand()+", "+sl.nextStrand()+"\n"+sl+"\n");
+				}
+			}
+		}
+		
+		if(plus!=null){plus.poisonAndWait();}
+		if(minus!=null){minus.poisonAndWait();}
+		if(chimeric!=null){chimeric.poisonAndWait();}
+		if(unmapped!=null){unmapped.poisonAndWait();}
+		
+		t.stop();
+		outstream.println(Tools.timeReadsBasesProcessed(t, reads, bases, 8));
+		outstream.println("Plus Reads:         "+preads);
+		outstream.println("Minus Reads:        "+mreads);
+		outstream.println("Chimeric Reads:     "+creads);
+		outstream.println("Unmapped Reads:     "+ureads);
+	}
+	
+	private PrintStream outstream=System.err;
+	
+}

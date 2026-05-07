@@ -1,0 +1,243 @@
+package cardinality;
+
+import java.util.concurrent.atomic.AtomicIntegerArray;
+
+import parse.Parser;
+import shared.Tools;
+import structures.LongList;
+
+/**
+ * LogLog cardinality estimation algorithm for counting unique k-mers.
+ * Uses floating-point compression to store maximum leading zero counts in buckets.
+ * Provides probabilistic cardinality estimates with configurable precision.
+ *
+ * @author Brian Bushnell
+ * @date Feb 20, 2020
+ */
+public final class LogLog2 extends CardinalityTracker {
+	
+	/*--------------------------------------------------------------*/
+	/*----------------        Initialization        ----------------*/
+	/*--------------------------------------------------------------*/
+	
+	/**
+	 * Creates a LogLog2 with default parameters: 2048 buckets, k=31, random seed, minProb=0
+	 */
+	LogLog2(){
+		this(2048, 31, -1, 0);
+	}
+	
+	/**
+	 * Creates a LogLog2 with parameters parsed from command-line arguments.
+	 * Initializes appropriate array type based on atomic threading mode.
+	 * @param p Parser containing configuration parameters
+	 */
+	LogLog2(Parser p){
+		super(p);
+		maxArray=new int[buckets];
+	}
+	
+	/**
+	 * Creates a LogLog2 with specified parameters.
+	 * Initializes bucket arrays for storing compressed maximum values.
+	 *
+	 * @param buckets_ Number of buckets (counters) for hash distribution
+	 * @param k_ K-mer length for sequence processing
+	 * @param seed Random number generator seed; -1 for random seed
+	 * @param minProb_ Minimum probability threshold for k-mer inclusion
+	 */
+	LogLog2(int buckets_, int k_, long seed, float minProb_){
+		super(buckets_, k_, seed, minProb_);
+		maxArray=new int[buckets];
+	}
+	
+	@Override
+	public LogLog2 copy() {return new LogLog2(buckets, k, -1, minProb);}
+	
+	/*--------------------------------------------------------------*/
+	/*----------------           Methods            ----------------*/
+	/*--------------------------------------------------------------*/
+	
+	//Restores floating point to integer
+	private long restore(int score){
+		long lowbits=(~score)&mask;
+		int leading=(int)(score>>>mantissabits);
+		long mantissa=(1L<<mantissabits)|lowbits;
+		int shift=wordlen-leading-mantissabits-1;
+		long original=mantissa<<shift;
+		return original;
+	}
+	
+	@Override
+	public final long cardinality(){
+		double difSum=0;
+		double hSum=0;
+		double gSum=0;
+		double rSum=0;
+		double estLogSum=0;
+		int count=0;
+		LongList list=new LongList(buckets);
+		{
+			for(int i=0; i<maxArray.length; i++){
+				int max=maxArray[i];
+				long val=restore(max);
+				if(max>0 && val>0){
+//					long val=restore(max);
+					long dif=val;
+					difSum+=dif;
+					hSum+=1.0/Tools.max(1, dif);
+					gSum+=Math.log(Tools.max(1, dif));
+					rSum+=Math.sqrt(dif);
+					count++;
+					double est=2*(Long.MAX_VALUE/(double)dif);
+					estLogSum+=Math.log(est);
+					list.add(dif);
+				}
+			}
+		}
+		final int div=Tools.max(count, 1);//Could be count or buckets but one causes problems
+		final double mean=difSum/div;
+		double hmean=hSum/div;
+		double gmean=gSum/div;
+		double rmean=rSum/div;
+		hmean=1.0/hmean;
+		gmean=Math.exp(gmean);
+		rmean=rmean*rmean;
+		list.sort();
+		final long median=list.median();
+		final double mwa=list.medianWeightedAverage();
+		
+		//What to use as the value from the counters 
+		final double proxy=(USE_MEAN ? mean : USE_MEDIAN ? median : USE_MWA ? mwa : USE_HMEAN ? hmean : USE_GMEAN ? gmean : mean);
+		
+		final double estimatePerSet=2*(Long.MAX_VALUE/proxy);
+		final double total=estimatePerSet*div*((count+buckets)/(float)(buckets+buckets));
+
+		final double estSum=div*Math.exp(estLogSum/(Tools.max(div, 1)));
+		double medianEst=2*(Long.MAX_VALUE/(double)median)*div;
+		
+//		new Exception().printStackTrace();
+		
+//		System.err.println(maxArray);
+////		Overall, it looks like "total" is the best, then "estSum", then "medianEst" is the worst, in terms of variance.
+//		System.err.println("difSum="+difSum+", count="+count+", mean="+mean+", est="+estimatePerSet+", total="+(long)total);
+//		System.err.println("estSum="+(long)estSum+", median="+median+", medianEst="+(long)medianEst);
+		
+		long cardinality=Math.min(added, (long)(total));
+		lastCardinalityStatic=cardinality;
+		return cardinality;
+	}
+	
+//	@Override
+//	public final long cardinality(){
+//		long sum=0;
+//		//assert(atomic);
+//		if(atomic){
+//			for(int i=0; i<maxArray.length(); i++){
+//				sum+=maxArray.get(i);
+//			}
+//		}else{
+//			for(int i=0; i<maxArray2.length; i++){
+//				sum+=maxArray2[i];
+//			}
+//		}
+//		double mean=sum/((1<<mantissabits)*(double)buckets);
+//		double correction=0.56326183361037098678934414274035;//0.56403894240204307426602541326855;
+//		//Better: //0.56326183361037098678934414274035
+//		long cardinality=(long)((((Math.pow(2, mean)-1)*buckets*SKIPMOD))*correction);
+//		lastCardinality=cardinality;
+//		return cardinality;
+//	}
+	
+	public final long cardinalityH(){
+		double sum=0;
+		for(int i=0; i<maxArray.length; i++){
+			int x=Tools.max(1, maxArray[i]);
+			sum+=1.0/x;
+		}
+		double mean=buckets/sum;
+		return (long)((Math.pow(2, mean)*buckets));
+	}
+	
+	/**
+	 * Merges another CardinalityTracker into this LogLog2.
+	 * Delegates to type-specific add method after class verification.
+	 * @param log CardinalityTracker to merge (must be LogLog2 instance)
+	 */
+	@Override
+	public final void add(CardinalityTracker log){
+		assert(log.getClass()==this.getClass());
+		add((LogLog2)log);
+	}
+	
+	public void add(LogLog2 log){
+		added+=log.added;
+		if(maxArray!=log.maxArray){
+			for(int i=0; i<buckets; i++){
+				maxArray[i]=Tools.max(maxArray[i], log.maxArray[i]);
+			}
+		}
+	}
+	
+	@Override
+	public void hashAndStore(final long number){
+//		if(number%SKIPMOD!=0){return;} //Slows down moderately
+		long key=number;
+		
+//		key=hash(key, tables[((int)number)&numTablesMask]);
+		
+		key=Tools.hash64shift(key);
+//		if(key<0 || key>maxHashedValue){return;}//Slows things down by 50% lot, mysteriously
+		int leading=Long.numberOfLeadingZeros(key);
+		
+//		counts[leading]++;
+		
+//		if(leading<3){return;}//Speeds up by 20%, even more at 4.  Slows at 2.
+		
+		int shift=wordlen-leading-mantissabits-1;
+		
+		int score=(leading<<mantissabits)+(int)((~(key>>>shift))&mask);
+//		assert(false) : "\n"+Long.toBinaryString(key)+", leading="+leading+", shift="+shift+"\n"+Long.toBinaryString(score);
+		
+		//+"\n"+score+"\n"+restore(score);
+		
+//		final int bucket=(int)((number&Integer.MAX_VALUE)%buckets);
+		final int bucket=(int)(key&bucketMask);
+		
+		maxArray[bucket]=Tools.max(score, maxArray[bucket]);
+	}
+	
+	/**
+	 * Returns compensation factor array for bucket corrections.
+	 * LogLog2 does not use compensation factors, so returns null.
+	 * @return null (no compensation factors used)
+	 */
+	@Override
+	public final float[] compensationFactorLogBucketsArray(){
+		return null;
+	}
+	
+	/*--------------------------------------------------------------*/
+	/*----------------            Fields            ----------------*/
+	/*--------------------------------------------------------------*/
+
+	private final int[] maxArray;
+	
+	/*--------------------------------------------------------------*/
+	/*----------------           Statics            ----------------*/
+	/*--------------------------------------------------------------*/
+	
+	public static void setMantissaBits(int x){
+		assert(x>=0 && x<25);
+		assert(x+6<32);
+		mantissabits=x;
+		mask=(1<<mantissabits)-1;
+	}
+
+	private static final int wordlen=64;
+	/** Number of mantissa bits for floating-point compression (default 20) */
+	private static int mantissabits=20;
+	private static int mask=(1<<mantissabits)-1;
+//	private static final int shift=wordlen-leading-mantissabits-1;
+	
+}
