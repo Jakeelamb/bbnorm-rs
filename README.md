@@ -95,6 +95,12 @@ publishable claim is: memory use is already much lower than vendored Java in
 these local runs, while large-slice speed still needs work in the input-counting
 hot path.
 
+For high-throughput bounded approximate runs where byte-stable collision order
+is less important than speed, `deterministic=f` enables direct parallel sketch
+updates. On the local 50k human-pair no-output benchmark, default deterministic
+mode measured 4.20s / 0.77 GiB RSS, while `deterministic=f` measured 1.42s /
+0.40 GiB RSS with the same read limit and memory settings.
+
 ## Repository Layout
 
 - `src/`: Rust library and CLI implementation.
