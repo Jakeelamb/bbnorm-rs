@@ -51,7 +51,7 @@ Verified locally:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all`
 
-Current tests cover 242 library tests, 8 basic integration tests, and 106
+Current tests cover 242 library tests, 8 basic integration tests, and 108
 Java-parity tests against the vendored BBTools snapshot.
 
 Implemented working areas include:
@@ -84,19 +84,37 @@ parity, accepted Rust-over-Java divergence, or still a gap.
 
 ## Benchmark Snapshot
 
-Latest local human-slice scaling results show the tradeoff clearly:
+The acceptance matrix is the publishable benchmark source of truth. The latest
+local matrix run at
+`tmp/parity_acceptance_publish_ready_20260508/acceptance_summary.tsv` verified
+9 bundled phiX exact-output modes and 6 local human bounded-sketch modes.
 
-| Read pairs | Java time | Rust time | Java RSS | Rust RSS |
-| ---: | ---: | ---: | ---: | ---: |
-| 1k | 0.71s | 0.10s | 3.28 GiB | 0.42 GiB |
-| 10k | 1.02s | 0.66s | 3.30 GiB | 0.67 GiB |
-| 50k | 1.53s | 3.04s | 3.37 GiB | 0.81 GiB |
-| 500k | 8.12s | 30.97s | 3.37 GiB | 0.81 GiB |
+Exact bundled rows:
 
-Other bounded/no-output and mode-specific runs are faster, but the conservative
-publishable claim is: memory use is already much lower than vendored Java in
-these local runs, while large-slice speed still needs work in the input-counting
-hot path.
+- `default`, `k=40`, `k=40 fixspikes=t`
+- `passes=2`
+- `keepall=t`
+- `ecc=t markuncorrectableerrors=t`
+- `qtrim=r trimq=10`
+- `minlen=100`
+- `passes=2 ecc=t markuncorrectableerrors=t`
+
+Local human bounded-sketch rows:
+
+| Row | Mode | Verdict | Java time | Rust time | Java RSS | Rust RSS | Hist drift ppm | Rhist drift ppm |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 50k | default | bounded_drift | 1.54s | 2.57s | 3.35 GiB | 3.30 GiB | 4 | 840 |
+| 50k | prefilter | bounded_drift | 2.05s | 2.68s | 3.35 GiB | 3.10 GiB | 4 | 840 |
+| 50k | k40_fixspikes | bounded_drift | 1.64s | 2.47s | 3.34 GiB | 3.12 GiB | 2 | 140 |
+| 500k | default | bounded_drift | 9.03s | 30.12s | 3.38 GiB | 3.38 GiB | 1227 | 1492 |
+| 500k | prefilter | bounded_drift | 10.53s | 31.81s | 3.26 GiB | 3.14 GiB | 49 | 998 |
+| 500k | k40_fixspikes | bounded_drift | 10.82s | 28.60s | 3.39 GiB | 3.25 GiB | 245 | 982 |
+
+The conservative publishable claim is: exact covered fixture modes match the
+vendored Java oracle byte-for-byte, bounded human rows stay within the matrix
+drift gate, and large-slice Rust speed still needs work in the input-counting
+hot path. `countup=t` is tracked separately as an accepted Rust-over-Java
+divergence guard rather than normal Java parity.
 
 For high-throughput bounded approximate runs where byte-stable collision order
 is less important than speed, `deterministic=f` enables direct parallel sketch

@@ -245,6 +245,10 @@ mode_args() {
   case "$mode" in
     default) printf '\n' ;;
     prefilter) printf 'prefilter=t\n' ;;
+    keepall) printf 'keepall=t\n' ;;
+    ecc_mark) printf 'ecc=t markuncorrectableerrors=t\n' ;;
+    qtrim_right) printf 'qtrim=r trimq=10\n' ;;
+    minlen) printf 'minlen=100\n' ;;
     k40) printf 'k=40\n' ;;
     k40_fixspikes) printf 'k=40 fixspikes=t\n' ;;
     passes2) printf 'passes=2\n' ;;

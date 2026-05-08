@@ -35,8 +35,31 @@ Core local matrix:
 scripts/parity_acceptance_matrix.py
 ```
 
+Disabled guard rows are excluded from the default pass. Run them explicitly
+when checking accepted Rust-over-Java divergences:
+
+```bash
+ROW_CASES=human_countup_guard_10k MATRIX_INCLUDE_DISABLED=1 scripts/parity_acceptance_matrix.py
+```
+
 The driver writes `acceptance_summary.tsv` plus the underlying Java/Rust
 artifact directories under `tmp/parity_acceptance_matrix_<timestamp>/`.
+
+## Current Scope
+
+The enabled matrix covers bundled exact-output probes for default, `k=40`,
+`fixspikes`, `passes=2`, `keepall`, `ecc=t markuncorrectableerrors=t`, right
+quality trimming, `minlen`, and multipass ECC. It also covers local human
+bounded-sketch rows at 50k and 500k read pairs when the local dataset is
+present.
+
+`countup=t` is intentionally not treated as normal parity in this matrix. The
+guard row classifies it as `rust_better_java_crashes`: Rust must complete, but
+the vendored Java oracle is skipped or expected to fail for that probe.
+
+The 500k row is deliberately included as a publish-readiness check rather than
+a speed victory lap. Current local evidence shows bounded drift within gate, but
+Rust remains slower than Java there because input counting dominates wall time.
 
 ## Development Rule
 
