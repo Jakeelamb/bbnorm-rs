@@ -4835,7 +4835,7 @@ impl PackedCountMinSketch {
         key: &KmerKey,
         count: u64,
     ) -> u64 {
-        let [first, second, third] = count_min_three_buckets(key, self.layout);
+        let [first, second, third] = count_min_three_buckets_raw(raw_kmer_key(key), self.layout);
         let first_depth = self.cell_16bit(first);
         let second_depth = self.cell_16bit(second);
         let third_depth = self.cell_16bit(third);
@@ -4920,7 +4920,7 @@ impl PackedCountMinSketch {
     }
 
     fn depth_16bit_3hash(&self, key: &KmerKey) -> u64 {
-        let [first, second, third] = count_min_three_buckets(key, self.layout);
+        let [first, second, third] = count_min_three_buckets_raw(raw_kmer_key(key), self.layout);
         self.cell_16bit(first)
             .min(self.cell_16bit(second))
             .min(self.cell_16bit(third))
@@ -5953,7 +5953,12 @@ fn fill_count_min_buckets(
 
 #[inline]
 fn count_min_three_buckets(key: &KmerKey, layout: KCountArrayLayout) -> [usize; 3] {
-    let mut hashed = bbtools_mask_hash_with_masks(raw_kmer_key(key), 0, layout.masks);
+    count_min_three_buckets_raw(raw_kmer_key(key), layout)
+}
+
+#[inline]
+fn count_min_three_buckets_raw(raw_key: u64, layout: KCountArrayLayout) -> [usize; 3] {
+    let mut hashed = bbtools_mask_hash_with_masks(raw_key, 0, layout.masks);
     let first = layout.bucket(hashed);
     hashed = bbtools_mask_hash_with_masks(hashed.rotate_right(BBTOOLS_HASH_BITS), 1, layout.masks);
     let second = layout.bucket(hashed);
