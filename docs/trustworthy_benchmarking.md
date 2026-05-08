@@ -110,3 +110,27 @@ scripts/compare_benchmark_baselines.py \
 
 The comparator emits median deltas and candidate/baseline ratios for wall time,
 RSS, and key stage timings.
+
+## Profiling One Baseline Command
+
+Use `scripts/profile_trustworthy_baseline.py` when profiling a result from this
+harness. It reuses the same command builder, so the profiled command keeps the
+same `reads`, `tablereads`, `bits`, target/depth, output, and Rust
+determinism knobs as the benchmark lane.
+
+```bash
+scripts/profile_trustworthy_baseline.py \
+  --variant rust_deterministic \
+  --tool perf \
+  --outdir tmp/profile_500k_bits16 \
+  -- \
+  --reads 500000 \
+  --table-reads 500000 \
+  --bits 16 \
+  --timeout 20m
+```
+
+The wrapper writes `profile_command.txt` and `profile_invocation.txt` beside
+the profiler output. Flamegraph mode enables release debuginfo and stores the
+generated `perf.data` in the profile artifact directory. Check those files
+before comparing a profile to a benchmark report.
