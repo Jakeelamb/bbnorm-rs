@@ -5208,6 +5208,12 @@ impl AtomicCountMinSketch {
         count: u64,
     ) -> (u64, usize) {
         let target_increment = count.min(u64::from(self.max_count)) as u32;
+        if self.hashes == 3 {
+            return self.increment_conservative_three_unlocked_and_count_newly_occupied(
+                key,
+                target_increment,
+            );
+        }
         let mut slots = [0usize; 16];
         let mut min_depth = self.max_count;
         fill_count_min_buckets(key, self.hashes, self.layout, &mut slots);
@@ -5229,6 +5235,34 @@ impl AtomicCountMinSketch {
             newly_occupied += usize::from(cell_newly_occupied);
         }
         (u64::from(previous_min), newly_occupied)
+    }
+
+    fn increment_conservative_three_unlocked_and_count_newly_occupied(
+        &self,
+        key: &KmerKey,
+        target_increment: u32,
+    ) -> (u64, usize) {
+        let [first, second, third] = count_min_three_buckets(key, self.layout);
+        let first_depth = self.cells_by_hash[first].load(Ordering::Relaxed);
+        let second_depth = self.cells_by_hash[second].load(Ordering::Relaxed);
+        let third_depth = self.cells_by_hash[third].load(Ordering::Relaxed);
+        let min_depth = first_depth.min(second_depth).min(third_depth);
+        if min_depth >= self.max_count {
+            return (u64::from(min_depth), 0);
+        }
+        let target = min_depth
+            .saturating_add(target_increment)
+            .min(self.max_count);
+        let (first_previous, first_new) =
+            raise_atomic_cell_to_at_least(&self.cells_by_hash[first], target);
+        let (second_previous, second_new) =
+            raise_atomic_cell_to_at_least(&self.cells_by_hash[second], target);
+        let (third_previous, third_new) =
+            raise_atomic_cell_to_at_least(&self.cells_by_hash[third], target);
+        (
+            u64::from(first_previous.min(second_previous).min(third_previous)),
+            usize::from(first_new) + usize::from(second_new) + usize::from(third_new),
+        )
     }
 
     fn lock_for_key(&self, key: &KmerKey) -> std::sync::MutexGuard<'_, ()> {
@@ -5770,9 +5804,7 @@ impl KCountArrayLayout {
         }
         let array_num = (hashed & self.array_mask) as usize;
         let cell = ((hashed >> self.array_bits) % self.cells_per_array as u64) as usize;
-        array_num
-            .saturating_mul(self.cells_per_array)
-            .saturating_add(cell)
+        array_num * self.cells_per_array + cell
     }
 }
 
@@ -5809,6 +5841,16 @@ fn fill_count_min_buckets(
         hashed = bbtools_mask_hash_with_masks(hashed, hash_index, layout.masks);
         *slot = layout.bucket(hashed);
     }
+}
+
+#[inline]
+fn count_min_three_buckets(key: &KmerKey, layout: KCountArrayLayout) -> [usize; 3] {
+    let mut hashed = bbtools_mask_hash_with_masks(raw_kmer_key(key), 0, layout.masks);
+    let first = layout.bucket(hashed);
+    hashed = bbtools_mask_hash_with_masks(hashed.rotate_right(BBTOOLS_HASH_BITS), 1, layout.masks);
+    let second = layout.bucket(hashed);
+    hashed = bbtools_mask_hash_with_masks(hashed.rotate_right(BBTOOLS_HASH_BITS), 2, layout.masks);
+    [first, second, layout.bucket(hashed)]
 }
 
 #[cfg(test)]
