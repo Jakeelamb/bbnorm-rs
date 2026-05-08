@@ -12,7 +12,7 @@ use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use std::alloc::{Layout, alloc_zeroed};
 use std::cmp::Ordering as CmpOrdering;
-use std::collections::BinaryHeap;
+use std::collections::{BTreeMap, BinaryHeap};
 use std::fs;
 use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
@@ -761,6 +761,7 @@ struct ReadLocalSideHistograms {
     entropy: Option<Vec<u64>>,
     identity: Option<ReadDepthHistogram>,
     alignment: Option<AlignmentFallbackHistograms>,
+    barcodes: Option<BTreeMap<String, u64>>,
 }
 
 #[derive(Debug, Clone)]
@@ -6979,6 +6980,9 @@ fn emit_read_local_side_outputs(config: &Config) -> Result<()> {
     if let Some(alignment) = hist.alignment.as_ref() {
         emit_alignment_fallback_side_outputs(config, alignment)?;
     }
+    if let (Some(path), Some(barcodes)) = (&config.barcode_stats_out, hist.barcodes.as_ref()) {
+        write_barcode_stats(path, barcodes, config)?;
+    }
     Ok(())
 }
 
@@ -6993,6 +6997,7 @@ fn read_local_side_outputs_enabled(config: &Config) -> bool {
         || config.base_hist_out.is_some()
         || config.entropy_hist_out.is_some()
         || config.identity_hist_out.is_some()
+        || config.barcode_stats_out.is_some()
         || alignment_fallback_side_outputs_enabled(config)
 }
 
@@ -7083,10 +7088,14 @@ fn collect_read_local_side_hists(config: &Config) -> Result<ReadLocalSideHistogr
                 ..AlignmentFallbackHistograms::default()
             }
         }),
+        barcodes: config.barcode_stats_out.is_some().then(BTreeMap::new),
     };
 
     while let Some((mut r1, mut r2)) = readers.next_pair()? {
         trim_pair(config, &mut r1, r2.as_mut());
+        if let Some(barcodes) = hist.barcodes.as_mut() {
+            increment_barcode_stats(barcodes, &r1, r2.is_some());
+        }
         increment_read_local_side_hists(config, &mut hist, &r1, false);
         if let Some(mate) = r2.as_ref() {
             increment_read_local_side_hists(config, &mut hist, mate, true);
@@ -7247,6 +7256,33 @@ fn increment_sequence_identity_hist(hist: &mut ReadDepthHistogram, record: &Sequ
     let idx = hist.reads.len().saturating_sub(1);
     hist.reads[idx] += 1;
     hist.bases[idx] += record.len() as u64;
+}
+
+fn increment_barcode_stats(
+    barcodes: &mut BTreeMap<String, u64>,
+    record: &SequenceRecord,
+    paired: bool,
+) {
+    let barcode = header_to_barcode(&record.id).unwrap_or("NONE");
+    let count = if paired { 2 } else { 1 };
+    *barcodes.entry(barcode.to_string()).or_insert(0) += count;
+}
+
+fn header_to_barcode(id: &str) -> Option<&str> {
+    let loc = id.rfind(':')?;
+    let loc2 = id
+        .find(' ')
+        .map(|idx| idx as isize)
+        .unwrap_or(-1)
+        .max(id.find('/').map(|idx| idx as isize).unwrap_or(-1));
+    if (loc as isize) <= loc2 || loc >= id.len().saturating_sub(1) {
+        return None;
+    }
+    let start = loc + 1;
+    let stop = id[start..]
+        .find([' ', '\t'])
+        .map_or(id.len(), |offset| start + offset);
+    Some(&id[start..stop])
 }
 
 fn increment_alignment_fallback_hists(
@@ -10317,6 +10353,30 @@ fn write_error_fallback_hist(
     writeln!(writer, "#Errors\tCount")?;
     if hist.read_count > 0 || config.print_zero_coverage {
         writeln!(writer, "0\t{}", hist.read_count)?;
+    }
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_barcode_stats(
+    path: &Path,
+    barcodes: &BTreeMap<String, u64>,
+    config: &Config,
+) -> Result<()> {
+    let mut writer = crate::seqio::create_output(path, config.overwrite || config.append)
+        .with_context(|| format!("creating barcode stats {}", path.display()))?;
+    let total: u64 = barcodes.values().copied().sum();
+    writeln!(writer, "#Reads\t{total}")?;
+    writeln!(writer, "#Barcodes\t{}", barcodes.len())?;
+
+    let mut sorted: Vec<_> = barcodes.iter().collect();
+    sorted.sort_by(|(left_name, left_count), (right_name, right_count)| {
+        right_count
+            .cmp(left_count)
+            .then_with(|| left_name.cmp(right_name))
+    });
+    for (barcode, count) in sorted {
+        writeln!(writer, "{barcode}\t{count}")?;
     }
     writer.flush()?;
     Ok(())

@@ -90,6 +90,7 @@ pub struct Config {
     pub base_hist_out: Option<PathBuf>,
     pub entropy_hist_out: Option<PathBuf>,
     pub identity_hist_out: Option<PathBuf>,
+    pub barcode_stats_out: Option<PathBuf>,
     pub k: usize,
     pub min_quality: u8,
     pub quality_in_offset: u8,
@@ -255,6 +256,7 @@ impl Default for Config {
             base_hist_out: None,
             entropy_hist_out: None,
             identity_hist_out: None,
+            barcode_stats_out: None,
             k: 31,
             min_quality: 5,
             quality_in_offset: 33,
@@ -1390,9 +1392,15 @@ fn handle_key_value(config: &mut Config, key: &str, value: &str) -> Result<()> {
                 "{key}={value} is a BBTools entropy-stat runtime control; Rust applies it to emitted entropy histograms"
             ));
         }
-        "barcodestats" | "barcodecounts" | "timehistogram" | "thist" => {
+        "barcodestats" | "barcodecounts" => {
+            config.barcode_stats_out = Some(path(value));
             config.notes.push(format!(
-                "{key}={value} is a BBTools side-output stats histogram; Rust does not emit this auxiliary file yet and keeps the supported normalization path"
+                "{key}={value} is a BBTools side-output barcode stats file; Rust emits a covered barcode-count fallback from read headers"
+            ));
+        }
+        "timehistogram" | "thist" => {
+            config.notes.push(format!(
+                "{key}={value} is a BBTools side-output mapper time histogram; Rust does not emit this auxiliary file yet and keeps the supported normalization path"
             ));
         }
         "matchhistogram" | "matchhist" | "mhist" => {
@@ -4103,10 +4111,14 @@ mod tests {
         assert_eq!(cfg.base_hist_out, Some(PathBuf::from("base.tsv")));
         assert_eq!(cfg.entropy_hist_out, Some(PathBuf::from("entropy.tsv")));
         assert_eq!(cfg.identity_hist_out, Some(PathBuf::from("id.tsv")));
+        assert_eq!(cfg.barcode_stats_out, None);
         assert_eq!(cfg.gc_bins, Some(100));
         assert_eq!(cfg.entropy_bins, 100);
         assert_eq!(cfg.identity_bins, 100);
         assert_eq!(cfg.side_hist_len, Some(1000));
+
+        let cfg = parse(&["in=reads.fq", "barcodestats=barcode.tsv"]);
+        assert_eq!(cfg.barcode_stats_out, Some(PathBuf::from("barcode.tsv")));
 
         for case in [
             "gcbins=abc",

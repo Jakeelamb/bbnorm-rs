@@ -2245,6 +2245,38 @@ fn representative_append_outputs_match_java_bbnorm() {
 }
 
 #[test]
+fn representative_barcode_stats_emit_java_shaped_counts() {
+    let dir = tempdir().expect("create tempdir");
+    let input = dir.path().join("barcode_stats_input.fq");
+    write_fastq_records(
+        &input,
+        &[
+            ("machine:run:flowcell:ACGT", "ACGTACGT"),
+            ("machine:run:flowcell:TGCA", "ACGTACGT"),
+            ("no_barcode", "ACGTACGT"),
+            ("machine:run:flowcell:ACGT", "ACGTACGT"),
+        ],
+    );
+
+    let rust_keep = dir.path().join("rust.barcode.keep.fq");
+    let rust_barcodes = dir.path().join("rust.barcode.tsv");
+
+    let rust_barcode_arg = format!("barcodestats={}", rust_barcodes.display());
+    let rust_args = quality_alias_keepall_args(&input, &rust_keep, &[&rust_barcode_arg]);
+    let rust_status = Command::new(env!("CARGO_BIN_EXE_bbnorm-rs"))
+        .args(&rust_args)
+        .output()
+        .expect("run bbnorm-rs");
+    assert_success("bbnorm-rs", &rust_status);
+
+    let contents = fs::read_to_string(&rust_barcodes).expect("read barcode stats");
+    assert_eq!(
+        contents,
+        "#Reads\t4\n#Barcodes\t3\nACGT\t2\nNONE\t1\nTGCA\t1\n"
+    );
+}
+
+#[test]
 fn representative_default_multipass_matches_java_bbnorm() {
     require_file("vendor/BBTools-master/current/jgi/KmerNormalize.class");
     require_java();
