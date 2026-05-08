@@ -4822,6 +4822,9 @@ impl PackedCountMinSketch {
         if self.update_mode == CountMinUpdateMode::Independent {
             return self.increment_independent_and_return_unincremented(key, count);
         }
+        if self.bits == 2 && self.hashes == 2 {
+            return self.increment_2bit_2hash_conservative_and_return_unincremented(key, count);
+        }
         let target_increment = count.min(self.max_count);
         let mut slots = [0usize; 16];
         let mut min_depth = self.max_count;
@@ -4844,6 +4847,30 @@ impl PackedCountMinSketch {
             }
         }
         previous_min
+    }
+
+    fn increment_2bit_2hash_conservative_and_return_unincremented(
+        &mut self,
+        key: &KmerKey,
+        count: u64,
+    ) -> u64 {
+        let [first, second] = count_min_two_buckets(key, self.layout);
+        let first_depth = self.cell_2bit(first);
+        let second_depth = self.cell_2bit(second);
+        let min_depth = first_depth.min(second_depth);
+        if min_depth >= self.max_count {
+            return min_depth;
+        }
+        let target = min_depth
+            .saturating_add(count.min(self.max_count))
+            .min(self.max_count);
+        if first_depth < target {
+            self.set_cell_2bit_with_previous(first, first_depth, target);
+        }
+        if second_depth < target {
+            self.set_cell_2bit_with_previous(second, second_depth, target);
+        }
+        min_depth
     }
 
     fn increment_independent_and_return_unincremented(&mut self, key: &KmerKey, count: u64) -> u64 {
@@ -4897,6 +4924,9 @@ impl PackedCountMinSketch {
         if self.bits == 64 {
             return self.words[slot];
         }
+        if self.bits == 2 {
+            return self.cell_2bit(slot);
+        }
         let bit = slot * self.bits as usize;
         let word = bit / 64;
         let offset = bit % 64;
@@ -4910,6 +4940,12 @@ impl PackedCountMinSketch {
             let high = self.words[word + 1] & ((1u64 << high_bits) - 1);
             ((high << low_bits) | low) & mask
         }
+    }
+
+    fn cell_2bit(&self, slot: usize) -> u64 {
+        let word = slot >> 5;
+        let offset = (slot & 31) << 1;
+        (self.words[word] >> offset) & 3
     }
 
     #[cfg(test)]
@@ -4929,6 +4965,10 @@ impl PackedCountMinSketch {
             self.words[slot] = value;
             return;
         }
+        if self.bits == 2 {
+            self.set_cell_2bit_raw(slot, value);
+            return;
+        }
         let bit = slot * self.bits as usize;
         let word = bit / 64;
         let offset = bit % 64;
@@ -4946,6 +4986,19 @@ impl PackedCountMinSketch {
             self.words[word + 1] =
                 (self.words[word + 1] & !high_mask) | ((value >> low_bits) & high_mask);
         }
+    }
+
+    fn set_cell_2bit_with_previous(&mut self, slot: usize, previous: u64, value: u64) {
+        let value = value.min(self.max_count);
+        self.set_cell_2bit_raw(slot, value);
+        self.note_cell_transition(previous, value, slot);
+    }
+
+    fn set_cell_2bit_raw(&mut self, slot: usize, value: u64) {
+        let word = slot >> 5;
+        let offset = (slot & 31) << 1;
+        let shifted_mask = 3u64 << offset;
+        self.words[word] = (self.words[word] & !shifted_mask) | ((value & 3) << offset);
     }
 
     fn note_cell_transition(&mut self, previous: u64, value: u64, slot: usize) {
@@ -5851,6 +5904,14 @@ fn count_min_three_buckets(key: &KmerKey, layout: KCountArrayLayout) -> [usize; 
     let second = layout.bucket(hashed);
     hashed = bbtools_mask_hash_with_masks(hashed.rotate_right(BBTOOLS_HASH_BITS), 2, layout.masks);
     [first, second, layout.bucket(hashed)]
+}
+
+#[inline]
+fn count_min_two_buckets(key: &KmerKey, layout: KCountArrayLayout) -> [usize; 2] {
+    let mut hashed = bbtools_mask_hash_with_masks(raw_kmer_key(key), 0, layout.masks);
+    let first = layout.bucket(hashed);
+    hashed = bbtools_mask_hash_with_masks(hashed.rotate_right(BBTOOLS_HASH_BITS), 1, layout.masks);
+    [first, layout.bucket(hashed)]
 }
 
 #[cfg(test)]
