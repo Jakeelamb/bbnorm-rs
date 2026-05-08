@@ -4803,6 +4803,9 @@ impl PackedCountMinSketch {
         if self.bits == 2 && self.hashes == 2 {
             return self.increment_2bit_2hash_conservative_and_return_unincremented(key, count);
         }
+        if self.bits == 16 && self.hashes == 3 {
+            return self.increment_16bit_3hash_conservative_and_return_unincremented(key, count);
+        }
         let target_increment = count.min(self.max_count);
         let mut slots = [0usize; 16];
         let mut min_depth = self.max_count;
@@ -4825,6 +4828,34 @@ impl PackedCountMinSketch {
             }
         }
         previous_min
+    }
+
+    fn increment_16bit_3hash_conservative_and_return_unincremented(
+        &mut self,
+        key: &KmerKey,
+        count: u64,
+    ) -> u64 {
+        let [first, second, third] = count_min_three_buckets(key, self.layout);
+        let first_depth = self.cell_16bit(first);
+        let second_depth = self.cell_16bit(second);
+        let third_depth = self.cell_16bit(third);
+        let min_depth = first_depth.min(second_depth).min(third_depth);
+        if min_depth >= self.max_count {
+            return min_depth;
+        }
+        let target = min_depth
+            .saturating_add(count.min(self.max_count))
+            .min(self.max_count);
+        if first_depth < target {
+            self.set_cell_16bit_with_previous(first, first_depth, target);
+        }
+        if second_depth < target {
+            self.set_cell_16bit_with_previous(second, second_depth, target);
+        }
+        if third_depth < target {
+            self.set_cell_16bit_with_previous(third, third_depth, target);
+        }
+        min_depth
     }
 
     fn increment_2bit_2hash_conservative_and_return_unincremented(
@@ -4991,6 +5022,12 @@ impl PackedCountMinSketch {
         let offset = (slot & 3) << 4;
         let shifted_mask = 0xffffu64 << offset;
         self.words[word] = (self.words[word] & !shifted_mask) | ((value & 0xffff) << offset);
+    }
+
+    fn set_cell_16bit_with_previous(&mut self, slot: usize, previous: u64, value: u64) {
+        let value = value.min(self.max_count);
+        self.set_cell_16bit_raw(slot, value);
+        self.note_cell_transition(previous, value, slot);
     }
 
     fn set_cell_2bit_with_previous(&mut self, slot: usize, previous: u64, value: u64) {
