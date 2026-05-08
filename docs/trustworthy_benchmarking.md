@@ -14,6 +14,7 @@ The harness intentionally records:
 - Complete long-form stage timings in `stage_timings.tsv`.
 - Java-vs-Rust histogram drift in `comparisons.tsv`.
 - Aggregate min/p10/median/p90/max/mean values in `summary.tsv`.
+- A compact human-readable median/ratio report in `report.md`.
 
 Default variants are:
 
@@ -68,8 +69,9 @@ scripts/benchmark_trustworthy_baseline.py \
 ## Interpreting Results
 
 Use `summary.tsv` for headline numbers. Prefer median stage timings over single
-runs. For bounded approximate modes, use `comparisons.tsv` to report drift
-instead of expecting byte-identical histograms.
+runs. Use `report.md` for a quick human-readable synopsis, then cite the TSVs
+for exact values. For bounded approximate modes, use `comparisons.tsv` to
+report drift instead of expecting byte-identical histograms.
 
 Key columns:
 
@@ -79,6 +81,32 @@ Key columns:
 - `stage_normalize`: Rust normalization time.
 - `stage_table_creation` and `stage_table_read`: Java table construction and
   read/normalization stages.
+- `report.md`: median wall/RSS/stage values plus Rust-vs-Java ratios.
 
 Do not mix lanes when making performance claims. Java-default `bits=32` atomic
 Rust runs and packed `bits=16` Rust runs exercise different data structures.
+
+## Regenerating Reports
+
+If a run finished before the current report format existed, regenerate only the
+report without rerunning benchmarks:
+
+```bash
+scripts/benchmark_trustworthy_baseline.py \
+  --report-only \
+  --outdir tmp/trustworthy_baseline_100k_20260508
+```
+
+## Comparing Two Baselines
+
+After an optimization attempt, compare aggregate medians from two artifact
+directories:
+
+```bash
+scripts/compare_benchmark_baselines.py \
+  tmp/trustworthy_baseline_100k_before \
+  tmp/trustworthy_baseline_100k_after
+```
+
+The comparator emits median deltas and candidate/baseline ratios for wall time,
+RSS, and key stage timings.

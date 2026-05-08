@@ -79,11 +79,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--write-outputs", action="store_true")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--skip-input-sha256", action="store_true")
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help="Regenerate report.md from an existing outdir without running benchmarks",
+    )
     parser.add_argument("--classpath", default=str(ROOT / "vendor/BBTools-master/current"))
     args = parser.parse_args()
 
     if args.repeats < 1:
         parser.error("--repeats must be at least 1")
+    if args.report_only:
+        return args
     if not args.r1.exists():
         parser.error(f"missing R1 input: {args.r1}")
     if args.r2 and not args.r2.exists():
@@ -401,6 +408,11 @@ def write_tsv(path: Path, rows: list[dict[str, object]], fieldnames: list[str]) 
         writer.writerows(rows)
 
 
+def read_tsv(path: Path) -> list[dict[str, str]]:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle, delimiter="\t"))
+
+
 def collect_metadata(args: argparse.Namespace) -> dict[str, object]:
     include_sha = not args.skip_input_sha256
     return {
@@ -489,9 +501,181 @@ def aggregate(raw_rows: list[dict[str, object]]) -> list[dict[str, str]]:
     return rows
 
 
+def summary_lookup(summary_rows: list[dict[str, str]]) -> dict[tuple[str, str], dict[str, str]]:
+    return {(row["variant"], row["metric"]): row for row in summary_rows}
+
+
+def median_value(
+    lookup: dict[tuple[str, str], dict[str, str]], variant: str, metric: str
+) -> float | None:
+    value = lookup.get((variant, metric), {}).get("median", "")
+    if value == "":
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def ratio_text(numerator: float | None, denominator: float | None) -> str:
+    if numerator is None or denominator is None or denominator == 0.0:
+        return ""
+    return f"{numerator / denominator:.3f}"
+
+
+def comparison_medians(comparison_rows: list[dict[str, object]]) -> list[dict[str, str]]:
+    grouped: dict[tuple[str, str], dict[str, list[float]]] = {}
+    for row in comparison_rows:
+        key = (str(row.get("rust_variant", "")), str(row.get("label", "")))
+        bucket = grouped.setdefault(
+            key,
+            {
+                "col2_abs_delta_ppm": [],
+                "col3_abs_delta_ppm": [],
+                "col2_abs_delta_sum": [],
+                "col3_abs_delta_sum": [],
+            },
+        )
+        for field, values in bucket.items():
+            try:
+                values.append(float(str(row.get(field, ""))))
+            except ValueError:
+                pass
+    result: list[dict[str, str]] = []
+    for (variant, label), values_by_field in sorted(grouped.items()):
+        result.append(
+            {
+                "rust_variant": variant,
+                "label": label,
+                "median_col2_abs_delta_sum": fmt_float(
+                    quantile(values_by_field["col2_abs_delta_sum"], 0.5)
+                ),
+                "median_col2_abs_delta_ppm": fmt_float(
+                    quantile(values_by_field["col2_abs_delta_ppm"], 0.5)
+                ),
+                "median_col3_abs_delta_sum": fmt_float(
+                    quantile(values_by_field["col3_abs_delta_sum"], 0.5)
+                ),
+                "median_col3_abs_delta_ppm": fmt_float(
+                    quantile(values_by_field["col3_abs_delta_ppm"], 0.5)
+                ),
+            }
+        )
+    return result
+
+
+def write_report(
+    path: Path,
+    metadata: dict[str, object],
+    summary_rows: list[dict[str, str]],
+    comparison_rows: list[dict[str, object]],
+) -> None:
+    lookup = summary_lookup(summary_rows)
+    variants = sorted({row["variant"] for row in summary_rows})
+    java_elapsed = median_value(lookup, "java", "elapsed_seconds")
+    java_rss = median_value(lookup, "java", "max_rss_kb")
+
+    lines = [
+        "# Benchmark Report",
+        "",
+        f"- Git commit: `{metadata.get('git_commit', '')}`",
+        f"- Git branch: `{metadata.get('git_branch', '')}`",
+        f"- Host: `{metadata.get('host', '')}`",
+        f"- Timestamp UTC: `{metadata.get('timestamp_utc', '')}`",
+        "",
+        "## Median Summary",
+        "",
+        "| Variant | Wall s | RSS MiB | Input Counting s | Normalize s | Wall / Java | RSS / Java |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for variant in variants:
+        elapsed = median_value(lookup, variant, "elapsed_seconds")
+        rss = median_value(lookup, variant, "max_rss_kb")
+        input_counting = median_value(lookup, variant, "stage_input_counting")
+        normalize = median_value(lookup, variant, "stage_normalize")
+        if variant == "java":
+            input_counting = median_value(lookup, variant, "stage_table_creation")
+            normalize = median_value(lookup, variant, "stage_table_read")
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    variant,
+                    fmt_float(elapsed) if elapsed is not None else "",
+                    fmt_float(rss / 1024.0) if rss is not None else "",
+                    fmt_float(input_counting) if input_counting is not None else "",
+                    fmt_float(normalize) if normalize is not None else "",
+                    ratio_text(elapsed, java_elapsed),
+                    ratio_text(rss, java_rss),
+                ]
+            )
+            + " |"
+        )
+
+    comparison_summary = comparison_medians(comparison_rows)
+    if comparison_summary:
+        lines.extend(
+            [
+                "",
+                "## Median Java/Rust Drift",
+                "",
+                "| Rust Variant | Table | Col2 Abs Delta | Col2 PPM | Col3 Abs Delta | Col3 PPM |",
+                "| --- | --- | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for row in comparison_summary:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        row["rust_variant"],
+                        row["label"],
+                        row["median_col2_abs_delta_sum"],
+                        row["median_col2_abs_delta_ppm"],
+                        row["median_col3_abs_delta_sum"],
+                        row["median_col3_abs_delta_ppm"],
+                    ]
+                )
+                + " |"
+            )
+
+    lines.extend(
+        [
+            "",
+            "## Files",
+            "",
+            "- `metadata.json`: environment, git, input, and setting metadata.",
+            "- `commands.tsv`: exact commands for each repeat and variant.",
+            "- `raw_runs.tsv`: raw wall-clock, RSS, and selected stage timings.",
+            "- `stage_timings.tsv`: long-form stage timing table.",
+            "- `comparisons.tsv`: per-repeat Java/Rust histogram drift.",
+            "- `summary.tsv`: aggregate min/p10/median/p90/max/mean metrics.",
+            "",
+        ]
+    )
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def main() -> int:
     args = parse_args()
     args.outdir.mkdir(parents=True, exist_ok=True)
+
+    if args.report_only:
+        metadata_path = args.outdir / "metadata.json"
+        summary_path = args.outdir / "summary.tsv"
+        comparisons_path = args.outdir / "comparisons.tsv"
+        if not metadata_path.exists() or not summary_path.exists():
+            raise SystemExit(
+                f"--report-only requires existing metadata.json and summary.tsv in {args.outdir}"
+            )
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        summary_rows = read_tsv(summary_path)
+        comparison_rows: list[dict[str, object]] = (
+            list(read_tsv(comparisons_path)) if comparisons_path.exists() else []
+        )
+        write_report(args.outdir / "report.md", metadata, summary_rows, comparison_rows)
+        print(f"Report written to {args.outdir / 'report.md'}")
+        return 0
 
     if not args.skip_build and any(variant.startswith("rust") for variant in args.variants):
         subprocess.run(["cargo", "build", "--release", "--quiet"], cwd=ROOT, check=True)
@@ -601,6 +785,7 @@ def main() -> int:
         summary_rows,
         ["variant", "metric", "n", "min", "p10", "median", "p90", "max", "mean"],
     )
+    write_report(args.outdir / "report.md", metadata, summary_rows, comparison_rows)
 
     print(f"\nBenchmark baseline written to {args.outdir}")
     print("Key aggregate rows:")
