@@ -4902,6 +4902,9 @@ impl PackedCountMinSketch {
         if self.bits == 64 {
             return self.words[slot];
         }
+        if self.bits == 16 {
+            return self.cell_16bit(slot);
+        }
         if self.bits == 2 {
             return self.cell_2bit(slot);
         }
@@ -4918,6 +4921,12 @@ impl PackedCountMinSketch {
             let high = self.words[word + 1] & ((1u64 << high_bits) - 1);
             ((high << low_bits) | low) & mask
         }
+    }
+
+    fn cell_16bit(&self, slot: usize) -> u64 {
+        let word = slot >> 2;
+        let offset = (slot & 3) << 4;
+        (self.words[word] >> offset) & 0xffff
     }
 
     fn cell_2bit(&self, slot: usize) -> u64 {
@@ -4943,6 +4952,10 @@ impl PackedCountMinSketch {
             self.words[slot] = value;
             return;
         }
+        if self.bits == 16 {
+            self.set_cell_16bit_raw(slot, value);
+            return;
+        }
         if self.bits == 2 {
             self.set_cell_2bit_raw(slot, value);
             return;
@@ -4964,6 +4977,13 @@ impl PackedCountMinSketch {
             self.words[word + 1] =
                 (self.words[word + 1] & !high_mask) | ((value >> low_bits) & high_mask);
         }
+    }
+
+    fn set_cell_16bit_raw(&mut self, slot: usize, value: u64) {
+        let word = slot >> 2;
+        let offset = (slot & 3) << 4;
+        let shifted_mask = 0xffffu64 << offset;
+        self.words[word] = (self.words[word] & !shifted_mask) | ((value & 0xffff) << offset);
     }
 
     fn set_cell_2bit_with_previous(&mut self, slot: usize, previous: u64, value: u64) {
