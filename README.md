@@ -77,7 +77,10 @@ Known gaps remain:
 
 See [docs/parity.md](docs/parity.md) and
 [docs/component_buildout.md](docs/component_buildout.md) for the detailed
-ledger.
+ledger. The acceptance matrix in
+[docs/parity_matrix.md](docs/parity_matrix.md) is the current front-door
+workflow for deciding whether a mode is exact parity, bounded approximate
+parity, accepted Rust-over-Java divergence, or still a gap.
 
 ## Benchmark Snapshot
 

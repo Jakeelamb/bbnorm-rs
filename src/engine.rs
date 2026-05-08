@@ -1760,25 +1760,11 @@ fn run_multipass(config: &Config) -> Result<RunSummary> {
     let mut last_in1 = config.in1.clone().context("missing in1")?;
     let mut last_in2 = config.in2.clone();
     let mut last_interleaved = config.interleaved;
-    let mut toss1_fragments = Vec::new();
-    let mut toss2_fragments = Vec::new();
 
     for pass in 1..config.passes {
         let temp1 = temp_dir.path().join(format!("pass{pass}.r1.{temp_ext}"));
         let temp2 = separate_pair_outputs
             .then(|| temp_dir.path().join(format!("pass{pass}.r2.{temp_ext}")));
-        let temp_toss1 = config
-            .out_toss1
-            .is_some()
-            .then(|| temp_dir.path().join(format!("pass{pass}.toss1.{temp_ext}")));
-        let temp_toss2 = separate_pair_outputs
-            .then(|| {
-                config
-                    .out_toss2
-                    .is_some()
-                    .then(|| temp_dir.path().join(format!("pass{pass}.toss2.{temp_ext}")))
-            })
-            .flatten();
         let mut pass_config = pass_config_for_intermediate(
             config,
             pass,
@@ -1787,18 +1773,12 @@ fn run_multipass(config: &Config) -> Result<RunSummary> {
             last_interleaved,
             temp1.clone(),
             temp2.clone(),
-            temp_toss1,
-            temp_toss2,
+            None,
+            None,
         );
         run_single_pass(&pass_config)
             .with_context(|| format!("running Rust multipass intermediate pass {pass}"))?;
 
-        if let Some(path) = pass_config.out_toss1.clone() {
-            toss1_fragments.push(path);
-        }
-        if let Some(path) = pass_config.out_toss2.clone() {
-            toss2_fragments.push(path);
-        }
         last_in1 = temp1;
         last_in2 = temp2;
         last_interleaved = paired && last_in2.is_none();
@@ -1849,29 +1829,27 @@ fn run_multipass(config: &Config) -> Result<RunSummary> {
 
     let summary = run_single_pass(&final_config).context("running Rust multipass final pass")?;
 
-    if let Some(path) = final_toss1 {
-        toss1_fragments.push(path);
-        if let Some(output) = config.out_toss1.as_deref() {
-            write_multipass_fragments(
-                &toss1_fragments,
-                output,
-                config.overwrite,
-                config.append,
-                "multipass toss output",
-            )?;
-        }
+    if let Some(path) = final_toss1
+        && let Some(output) = config.out_toss1.as_deref()
+    {
+        write_multipass_fragments(
+            &[path],
+            output,
+            config.overwrite,
+            config.append,
+            "multipass toss output",
+        )?;
     }
-    if let Some(path) = final_toss2 {
-        toss2_fragments.push(path);
-        if let Some(output) = config.out_toss2.as_deref() {
-            write_multipass_fragments(
-                &toss2_fragments,
-                output,
-                config.overwrite,
-                config.append,
-                "multipass paired toss output",
-            )?;
-        }
+    if let Some(path) = final_toss2
+        && let Some(output) = config.out_toss2.as_deref()
+    {
+        write_multipass_fragments(
+            &[path],
+            output,
+            config.overwrite,
+            config.append,
+            "multipass paired toss output",
+        )?;
     }
     Ok(summary)
 }

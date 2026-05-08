@@ -1302,6 +1302,57 @@ fn real_phi_x_pair_matches_java_bbnorm_for_single_pass_error_toss_normalization(
 }
 
 #[test]
+fn real_phi_x_pair_matches_java_bbnorm_for_multipass_toss_outputs() {
+    require_file(SAMPLE1);
+    require_file(SAMPLE2);
+    require_file("vendor/BBTools-master/current/jgi/KmerNormalize.class");
+    require_java();
+
+    let dir = tempdir().expect("create tempdir");
+    let java_keep1 = dir.path().join("java.keep1.fq");
+    let java_keep2 = dir.path().join("java.keep2.fq");
+    let java_toss1 = dir.path().join("java.toss1.fq");
+    let java_toss2 = dir.path().join("java.toss2.fq");
+    let rust_keep1 = dir.path().join("rust.keep1.fq");
+    let rust_keep2 = dir.path().join("rust.keep2.fq");
+    let rust_toss1 = dir.path().join("rust.toss1.fq");
+    let rust_toss2 = dir.path().join("rust.toss2.fq");
+
+    let java_args = normalize_benchmark_shape_args(NormalizePaths {
+        keep1: &java_keep1,
+        keep2: &java_keep2,
+        toss1: &java_toss1,
+        toss2: &java_toss2,
+    });
+    let java_status = Command::new("java")
+        .arg("-Xmx1g")
+        .arg("-cp")
+        .arg(BBTOOLS_CP)
+        .arg("jgi.KmerNormalize")
+        .args(&java_args)
+        .output()
+        .expect("run java bbnorm");
+    assert_success("java bbnorm", &java_status);
+
+    let rust_args = normalize_benchmark_shape_args(NormalizePaths {
+        keep1: &rust_keep1,
+        keep2: &rust_keep2,
+        toss1: &rust_toss1,
+        toss2: &rust_toss2,
+    });
+    let rust_status = Command::new(env!("CARGO_BIN_EXE_bbnorm-rs"))
+        .args(&rust_args)
+        .output()
+        .expect("run bbnorm-rs");
+    assert_success("bbnorm-rs", &rust_status);
+
+    assert_same_file(&java_keep1, &rust_keep1);
+    assert_same_file(&java_keep2, &rust_keep2);
+    assert_same_file(&java_toss1, &rust_toss1);
+    assert_same_file(&java_toss2, &rust_toss2);
+}
+
+#[test]
 fn real_phi_x_pair_matches_java_bbnorm_for_lowthresh_zero_error_toss() {
     assert_normalize_matches_java_with_extra(&["lowthresh=0"]);
 }
@@ -4325,6 +4376,29 @@ fn normalize_args_without_default_toss(paths: NormalizePaths<'_>) -> Vec<OsStrin
         "threads=1".to_string(),
         "overwrite=t".to_string(),
         "bits=32".to_string(),
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect()
+}
+
+fn normalize_benchmark_shape_args(paths: NormalizePaths<'_>) -> Vec<OsString> {
+    [
+        format!("in={SAMPLE1}"),
+        format!("in2={SAMPLE2}"),
+        format!("out={}", paths.keep1.display()),
+        format!("out2={}", paths.keep2.display()),
+        format!("outt={}", paths.toss1.display()),
+        format!("outt2={}", paths.toss2.display()),
+        "passes=2".to_string(),
+        "target=40".to_string(),
+        "max=80".to_string(),
+        "min=5".to_string(),
+        "k=31".to_string(),
+        "threads=1".to_string(),
+        "zipthreads=1".to_string(),
+        "bits=32".to_string(),
+        "overwrite=t".to_string(),
     ]
     .into_iter()
     .map(OsString::from)
