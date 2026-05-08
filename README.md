@@ -123,6 +123,13 @@ mode measured 3.18s / 0.87 GiB RSS after chunk-size tuning, while
 `deterministic=f` measured 1.42s / 0.40 GiB RSS with the same read limit and
 memory settings.
 
+For repeatable current baselines, use
+[`scripts/benchmark_trustworthy_baseline.py`](scripts/benchmark_trustworthy_baseline.py).
+It records git/tool/input metadata, command lines, raw run data, stage timings,
+Java/Rust histogram drift, and aggregate p10/median/p90 summaries. See
+[`docs/trustworthy_benchmarking.md`](docs/trustworthy_benchmarking.md) for the
+Java-default and packed 16-bit benchmark lanes.
+
 ## Repository Layout
 
 - `src/`: Rust library and CLI implementation.
