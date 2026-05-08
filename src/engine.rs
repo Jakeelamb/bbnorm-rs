@@ -403,7 +403,7 @@ struct KCountArrayLayout {
     masks: BbtoolsHashMaskRef,
 }
 
-const COUNT_PARALLEL_CHUNK_SIZE: usize = 4096;
+const COUNT_PARALLEL_CHUNK_SIZE: usize = 8192;
 const COUNTUP_SORT_RUN_PAIR_LIMIT: usize = 65_536;
 const COUNTUP_SORT_RUN_BYTE_LIMIT: usize = 64 * 1024 * 1024;
 const COUNTUP_SORT_MERGE_FANIN: usize = 128;
