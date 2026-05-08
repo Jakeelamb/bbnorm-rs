@@ -404,6 +404,7 @@ struct KCountArrayLayout {
 }
 
 const COUNT_PARALLEL_CHUNK_SIZE: usize = 8192;
+const COUNT_CHUNK_LOCAL_MAP_MAX_CAPACITY: usize = 131_072;
 const COUNTUP_SORT_RUN_PAIR_LIMIT: usize = 65_536;
 const COUNTUP_SORT_RUN_BYTE_LIMIT: usize = 64 * 1024 * 1024;
 const COUNTUP_SORT_MERGE_FANIN: usize = 128;
@@ -5973,6 +5974,37 @@ fn new_count_map(config: &Config) -> CountMap {
     counts
 }
 
+fn count_map_with_capacity(capacity: usize) -> CountMap {
+    let mut counts = CountMap::default();
+    if capacity > 0 {
+        let _ = counts.try_reserve(capacity);
+    }
+    counts
+}
+
+fn count_chunk_local_map(
+    config: &Config,
+    pairs: &[(SequenceRecord, Option<SequenceRecord>)],
+) -> CountMap {
+    count_map_with_capacity(count_chunk_local_map_capacity(config, pairs))
+}
+
+fn count_chunk_local_map_capacity(
+    config: &Config,
+    pairs: &[(SequenceRecord, Option<SequenceRecord>)],
+) -> usize {
+    let total_windows: usize = pairs
+        .iter()
+        .map(|(r1, r2)| pair_kmer_window_capacity(config, r1, r2.as_ref()))
+        .sum();
+    if total_windows == 0 {
+        return 0;
+    }
+    total_windows
+        .div_ceil(rayon::current_num_threads().max(1))
+        .clamp(64, COUNT_CHUNK_LOCAL_MAP_MAX_CAPACITY)
+}
+
 fn count_map_capacity_hint(config: &Config) -> Option<usize> {
     let explicit = config.table_initial_size;
     let prealloc = preallocation_capacity_hint(config);
@@ -8841,10 +8873,13 @@ fn increment_counts_from_pair_chunk(
 ) {
     let chunk_counts = pairs
         .par_iter()
-        .fold(CountMap::default, |mut local_counts, (r1, r2)| {
-            increment_pair_counts(config, &mut local_counts, r1, r2.as_ref());
-            local_counts
-        })
+        .fold(
+            || count_chunk_local_map(config, pairs),
+            |mut local_counts, (r1, r2)| {
+                increment_pair_counts(config, &mut local_counts, r1, r2.as_ref());
+                local_counts
+            },
+        )
         .reduce(CountMap::default, |mut left, right| {
             merge_count_maps(&mut left, right);
             left
@@ -8860,16 +8895,19 @@ fn increment_sketch_from_pair_chunk(
 ) {
     let chunk_counts = pairs
         .par_iter()
-        .fold(CountMap::default, |mut local_counts, (r1, r2)| {
-            increment_pair_counts_with_prefilter(
-                config,
-                &mut local_counts,
-                r1,
-                r2.as_ref(),
-                prefilter,
-            );
-            local_counts
-        })
+        .fold(
+            || count_chunk_local_map(config, pairs),
+            |mut local_counts, (r1, r2)| {
+                increment_pair_counts_with_prefilter(
+                    config,
+                    &mut local_counts,
+                    r1,
+                    r2.as_ref(),
+                    prefilter,
+                );
+                local_counts
+            },
+        )
         .reduce(CountMap::default, |mut left, right| {
             merge_count_maps(&mut left, right);
             left
@@ -8957,16 +8995,19 @@ fn increment_atomic_sketch_from_pair_chunk(
 
     let chunk_counts = pairs
         .par_iter()
-        .fold(CountMap::default, |mut local_counts, (r1, r2)| {
-            increment_pair_counts_with_prefilter(
-                config,
-                &mut local_counts,
-                r1,
-                r2.as_ref(),
-                prefilter,
-            );
-            local_counts
-        })
+        .fold(
+            || count_chunk_local_map(config, pairs),
+            |mut local_counts, (r1, r2)| {
+                increment_pair_counts_with_prefilter(
+                    config,
+                    &mut local_counts,
+                    r1,
+                    r2.as_ref(),
+                    prefilter,
+                );
+                local_counts
+            },
+        )
         .reduce(CountMap::default, |mut left, right| {
             merge_count_maps(&mut left, right);
             left
