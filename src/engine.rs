@@ -5181,6 +5181,16 @@ impl AtomicCountMinSketch {
         self.increment_and_count_newly_occupied(key, count).1
     }
 
+    fn add_key_count_unlocked_counting_newly_occupied(&self, key: &KmerKey, count: u64) -> usize {
+        if self.update_mode == CountMinUpdateMode::Independent {
+            self.increment_independent_and_count_newly_occupied(key, count)
+                .1
+        } else {
+            self.increment_conservative_unlocked_and_count_newly_occupied(key, count)
+                .1
+        }
+    }
+
     fn increment_and_count_newly_occupied(&self, key: &KmerKey, count: u64) -> (u64, usize) {
         if count == 0 {
             return (self.depth(key), 0);
@@ -5263,7 +5273,9 @@ impl AtomicCountMinSketch {
             } else {
                 counts
                     .iter()
-                    .map(|(key, count)| self.add_key_count_counting_newly_occupied(key, *count))
+                    .map(|(key, count)| {
+                        self.add_key_count_unlocked_counting_newly_occupied(key, *count)
+                    })
                     .sum()
             };
         self.add_occupied_slots(newly_occupied);
