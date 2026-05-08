@@ -4878,6 +4878,13 @@ impl PackedCountMinSketch {
         self.increments = self.increments.saturating_add(key_increments);
     }
 
+    fn depth_16bit_3hash(&self, key: &KmerKey) -> u64 {
+        let [first, second, third] = count_min_three_buckets(key, self.layout);
+        self.cell_16bit(first)
+            .min(self.cell_16bit(second))
+            .min(self.cell_16bit(third))
+    }
+
     fn occupied_slots_at_least(&self, min_depth: u64) -> usize {
         if min_depth > self.max_count {
             return 0;
@@ -5710,6 +5717,9 @@ fn atomic_count_min_locks(update_mode: CountMinUpdateMode) -> Result<Vec<Mutex<(
 
 impl CountLookup for PackedCountMinSketch {
     fn depth(&self, key: &KmerKey) -> u64 {
+        if self.bits == 16 && self.hashes == 3 {
+            return self.depth_16bit_3hash(key);
+        }
         let mut slots = [0usize; 16];
         fill_count_min_buckets(key, self.hashes, self.layout, &mut slots);
         slots
