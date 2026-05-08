@@ -9063,6 +9063,10 @@ fn increment_sketch_from_pair_chunk(
     pairs: &[(SequenceRecord, Option<SequenceRecord>)],
     prefilter: Option<PrefilterGate<'_>>,
 ) {
+    if config.deterministic && sketch.update_mode == CountMinUpdateMode::Conservative {
+        increment_sketch_from_pair_chunk_sorted_replay(config, sketch, pairs, prefilter);
+        return;
+    }
     let chunk_counts = pairs
         .par_iter()
         .fold(
@@ -9084,6 +9088,54 @@ fn increment_sketch_from_pair_chunk(
         });
     let key_increments = chunk_counts.values().copied().sum();
     sketch.add_key_counts(&chunk_counts);
+    sketch.add_key_increments(key_increments);
+}
+
+fn increment_sketch_from_pair_chunk_sorted_replay(
+    config: &Config,
+    sketch: &mut PackedCountMinSketch,
+    pairs: &[(SequenceRecord, Option<SequenceRecord>)],
+    prefilter: Option<PrefilterGate<'_>>,
+) {
+    let mut entries = pairs
+        .par_iter()
+        .fold(
+            || count_chunk_local_map(config, pairs),
+            |mut local_counts, (r1, r2)| {
+                increment_pair_counts_with_prefilter(
+                    config,
+                    &mut local_counts,
+                    r1,
+                    r2.as_ref(),
+                    prefilter,
+                );
+                local_counts
+            },
+        )
+        .map(|counts| counts.into_iter().collect::<Vec<_>>())
+        .reduce(Vec::new, |mut left, mut right| {
+            left.append(&mut right);
+            left
+        });
+    entries.par_sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+
+    let mut key_increments = 0u64;
+    let mut iter = entries.into_iter();
+    let Some((mut current_key, mut current_count)) = iter.next() else {
+        return;
+    };
+    for (key, count) in iter {
+        if key == current_key {
+            current_count = current_count.saturating_add(count);
+        } else {
+            key_increments = key_increments.saturating_add(current_count);
+            sketch.add_key_count(&current_key, current_count);
+            current_key = key;
+            current_count = count;
+        }
+    }
+    key_increments = key_increments.saturating_add(current_count);
+    sketch.add_key_count(&current_key, current_count);
     sketch.add_key_increments(key_increments);
 }
 
