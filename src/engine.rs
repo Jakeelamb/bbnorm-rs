@@ -4900,6 +4900,16 @@ impl PackedCountMinSketch {
     }
 
     fn add_key_counts(&mut self, counts: &CountMap) {
+        if self.update_mode == CountMinUpdateMode::Conservative
+            && self.bits == 16
+            && self.hashes == 3
+        {
+            for (key, count) in counts {
+                let _ =
+                    self.increment_16bit_3hash_conservative_and_return_unincremented(key, *count);
+            }
+            return;
+        }
         for (key, count) in counts {
             self.add_key_count(key, *count);
         }
