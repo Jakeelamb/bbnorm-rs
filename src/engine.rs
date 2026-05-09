@@ -11771,6 +11771,88 @@ mod tests {
     }
 
     #[test]
+    fn packed_count_min_reduced_sorted_replay_matches_individual_kmer_updates() {
+        let keys = [
+            KmerKey::Short(13),
+            KmerKey::Short(29),
+            KmerKey::Short(13),
+            KmerKey::Short(31),
+            KmerKey::Short(29),
+            KmerKey::Short(29),
+            KmerKey::Short(47),
+        ];
+        let mut individual = PackedCountMinSketch::new(4099, 3, 16).unwrap();
+        let mut reduced = PackedCountMinSketch::new(4099, 3, 16).unwrap();
+
+        for key in &keys {
+            individual.increment(key);
+        }
+        for (key, count) in sorted_reduced_test_runs(keys) {
+            reduced.add_key_count(&key, count);
+            reduced.add_key_increments(count);
+        }
+
+        assert_eq!(reduced.increments, individual.increments);
+        assert_eq!(reduced.occupied_slots, individual.occupied_slots);
+        assert_eq!(reduced.words, individual.words);
+    }
+
+    #[test]
+    fn atomic_count_min_reduced_sorted_replay_matches_individual_kmer_updates() {
+        let keys = [
+            KmerKey::Short(13),
+            KmerKey::Short(29),
+            KmerKey::Short(13),
+            KmerKey::Short(31),
+            KmerKey::Short(29),
+            KmerKey::Short(29),
+            KmerKey::Short(47),
+        ];
+        let individual = AtomicCountMinSketch::new(4099, 3).unwrap();
+        let reduced = AtomicCountMinSketch::new(4099, 3).unwrap();
+
+        for key in &keys {
+            individual.increment_key(key);
+            individual.add_key_increments(1);
+        }
+        for (key, count) in sorted_reduced_test_runs(keys) {
+            reduced.add_key_count(&key, count);
+            reduced.add_key_increments(count);
+        }
+
+        assert_eq!(
+            reduced.increments.load(Ordering::Relaxed),
+            individual.increments.load(Ordering::Relaxed)
+        );
+        assert_eq!(
+            reduced.occupied_slots.load(Ordering::Relaxed),
+            individual.occupied_slots.load(Ordering::Relaxed)
+        );
+        for slot in 0..individual.cells {
+            assert_eq!(
+                reduced.cells_by_hash[slot].load(Ordering::Relaxed),
+                individual.cells_by_hash[slot].load(Ordering::Relaxed)
+            );
+        }
+    }
+
+    fn sorted_reduced_test_runs<const N: usize>(keys: [KmerKey; N]) -> Vec<(KmerKey, u64)> {
+        let mut keys = keys;
+        keys.sort_unstable();
+        let mut runs = Vec::new();
+        for key in keys {
+            if let Some((last_key, count)) = runs.last_mut()
+                && last_key == &key
+            {
+                *count += 1;
+                continue;
+            }
+            runs.push((key, 1));
+        }
+        runs
+    }
+
+    #[test]
     fn exact_collision_estimates_follow_lockedincrement_mode() {
         let mut config = Config {
             count_min: crate::cli::CountMinSettings {
