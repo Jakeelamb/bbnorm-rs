@@ -52,6 +52,7 @@ These were tested after the profile and rejected:
 | Packed 16-bit word-scan sparse histogram | 20.336s | Rejected; histogram change was noise/regression |
 | `COUNT_PARALLEL_CHUNK_SIZE=16384` | 20.848s | Rejected; worse than 8192 |
 | Raw short-kmer vector sort/reduce | 20.640s | Rejected; lower RSS but slower in the publish harness |
+| Sharded raw short-kmer exact counter | 25.040s | Rejected; byte-identical output, lower RSS, but much slower input counting |
 
 All rejected attempts preserved output shape in focused checks, but none beat
 the existing benchmark median. They should not be reintroduced without a new
@@ -73,6 +74,7 @@ algorithmic change:
    `scripts/benchmark_trustworthy_baseline.py`; ad hoc timing loops were too
    optimistic for this change.
 
-The useful lesson from the raw short-kmer experiment is that removing
-`FxHashMap<KmerKey, u64>` can reduce memory, but if it replaces hashing with a
-large comparison sort, the publish-lane wall time gets worse.
+The useful lesson from the raw short-kmer and sharded exact-counter
+experiments is that removing `FxHashMap<KmerKey, u64>` can reduce memory, but
+extra run formation, per-shard maps, and merge work are expensive enough to
+lose badly in the publish lane.
