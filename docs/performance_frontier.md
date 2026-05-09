@@ -51,6 +51,7 @@ These were tested after the profile and rejected:
 | Raw short-key `depth` trait fast path | 20.503s | Rejected; made lookup path slower |
 | Packed 16-bit word-scan sparse histogram | 20.336s | Rejected; histogram change was noise/regression |
 | `COUNT_PARALLEL_CHUNK_SIZE=16384` | 20.848s | Rejected; worse than 8192 |
+| Raw short-kmer vector sort/reduce | 20.640s | Rejected; lower RSS but slower in the publish harness |
 
 All rejected attempts preserved output shape in focused checks, but none beat
 the existing benchmark median. They should not be reintroduced without a new
@@ -58,17 +59,20 @@ profile showing a different bottleneck.
 
 ## Next Serious Moves
 
-Small generic micro-specialization is not enough. The next plausible work is a
-larger hot-path change:
+Small generic micro-specialization is not enough, and a plain raw-vector
+comparison sort is not enough either. The next plausible work needs a stronger
+algorithmic change:
 
-1. Replace chunk-local `FxHashMap<KmerKey, u64>` aggregation with a compact
-   short-kmer buffer plus integer sort/reduce for `k <= 31`.
+1. Replace comparison sorting with radix/counting-style short-kmer run
+   formation, or use a sharded exact counter that preserves deterministic
+   replay order without one global comparison sort per chunk.
 2. Keep deterministic chunk replay order exactly the same.
 3. Feed reduced `(raw_short_kmer, count)` runs directly into a raw packed
    16-bit/3-hash replay function.
-4. Only then compare against Java and the current Rust baseline with
-   `scripts/benchmark_trustworthy_baseline.py`.
+4. Compare against Java and the current Rust baseline only with
+   `scripts/benchmark_trustworthy_baseline.py`; ad hoc timing loops were too
+   optimistic for this change.
 
-This is the most likely CPU path to close the gap because it attacks the
-measured combination of hash aggregation, sort/reduce, and packed sketch replay
-without changing BBNorm's conservative count-min semantics.
+The useful lesson from the raw short-kmer experiment is that removing
+`FxHashMap<KmerKey, u64>` can reduce memory, but if it replaces hashing with a
+large comparison sort, the publish-lane wall time gets worse.
