@@ -88,21 +88,23 @@ while preserving the same chunk replay contract:
 
 | Dataset | Metric | CPU deterministic | One-shot GPU reduce | Persistent GPU reduce |
 | --- | --- | ---: | ---: | ---: |
-| 50k read pairs | Wall | 2.142 s | 5.544 s | 2.569 s |
-| 50k read pairs | Input counting stage | 1.589 s | 4.991 s | 2.027 s |
+| 50k read pairs | Wall | 2.034 s | 5.544 s | 2.782 s |
+| 50k read pairs | Input counting stage | 1.521 s | 4.991 s | 2.131 s |
 | 50k read pairs | Kept reads | 3,510 | 3,510 | 3,510 |
 | 50k read pairs | Input unique kmers | 11,140,933 | 11,140,933 | 11,140,933 |
 | 50k read pairs | Hist/rhist comparison | baseline | identical | identical |
-| 500k read pairs | Wall | 21.499 s | 41.137 s | 25.616 s |
-| 500k read pairs | Input counting stage | 16.029 s | 35.642 s | 19.705 s |
+| 500k read pairs | Wall | 19.334 s | 41.137 s | 21.844 s |
+| 500k read pairs | Input counting stage | 14.405 s | 35.642 s | 16.787 s |
 | 500k read pairs | Kept reads | 54,798 | 54,798 | 54,798 |
 | 500k read pairs | Input unique kmers | 108,712,290 | 108,712,290 | 108,712,290 |
 | 500k read pairs | Hist/rhist comparison | baseline | identical | identical |
 
 The persistent helper is a real structural improvement over launching a helper
 per chunk, but it still loses to the CPU implementation on this machine. The
-remaining overhead is likely dominated by host/device copies, binary pipe I/O,
-and per-chunk CUDA allocations inside the helper.
+current reusable-buffer helper removes repeated CUDA allocation from the hot
+chunk loop. The remaining overhead is likely dominated by host/device copies,
+binary pipe I/O, CUB temp-sizing calls, and CPU-side replay into the count-min
+sketch.
 
 ## Next Correct Target
 
@@ -110,8 +112,8 @@ The next performance target is keeping chunk-preserving semantics while removing
 the remaining per-chunk overheads:
 
 1. Keep the same deterministic chunk boundaries as CPU counting.
-2. Reuse device buffers inside the persistent helper or move to a feature-gated
-   FFI backend.
+2. Move to a feature-gated FFI backend or a richer helper protocol to remove
+   pipe serialization and reduce host/device transfers.
 3. Replay each chunk's sorted reduced runs in chunk order.
 
 That keeps the existing deterministic replay semantics while allowing CUB to

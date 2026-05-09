@@ -6489,11 +6489,18 @@ where
             .then(|| PersistentGpuReducer::start(helper))
             .transpose()?;
         let mut chunk = Vec::with_capacity(COUNT_PARALLEL_CHUNK_SIZE);
+        let mut persistent_keys = Vec::new();
         while let Some((r1, r2)) = readers.next_pair()? {
             chunk.push((r1, r2));
             if chunk.len() >= COUNT_PARALLEL_CHUNK_SIZE {
                 if let Some(reducer) = &mut persistent {
-                    reduce_gpu_pair_chunk_persistent(config, reducer, &chunk, &mut f)?;
+                    reduce_gpu_pair_chunk_persistent(
+                        config,
+                        reducer,
+                        &chunk,
+                        &mut persistent_keys,
+                        &mut f,
+                    )?;
                 } else {
                     reduce_gpu_pair_chunk(config, helper, &kmers_path, &runs_path, &chunk, &mut f)?;
                 }
@@ -6502,7 +6509,13 @@ where
         }
         if !chunk.is_empty() {
             if let Some(reducer) = &mut persistent {
-                reduce_gpu_pair_chunk_persistent(config, reducer, &chunk, &mut f)?;
+                reduce_gpu_pair_chunk_persistent(
+                    config,
+                    reducer,
+                    &chunk,
+                    &mut persistent_keys,
+                    &mut f,
+                )?;
             } else {
                 reduce_gpu_pair_chunk(config, helper, &kmers_path, &runs_path, &chunk, &mut f)?;
             }
@@ -6550,17 +6563,17 @@ fn reduce_gpu_pair_chunk_persistent<F>(
     config: &Config,
     reducer: &mut PersistentGpuReducer,
     pairs: &[(SequenceRecord, Option<SequenceRecord>)],
+    keys: &mut Vec<u64>,
     f: &mut F,
 ) -> Result<()>
 where
     F: FnMut(KmerKey, u64),
 {
-    let mut keys = Vec::new();
-    collect_pair_chunk_short_kmers(config, pairs, &mut keys)?;
+    collect_pair_chunk_short_kmers(config, pairs, keys)?;
     if keys.is_empty() {
         return Ok(());
     }
-    reducer.reduce(&keys, f)
+    reducer.reduce(keys, f)
 }
 
 fn write_pair_chunk_short_kmers(
