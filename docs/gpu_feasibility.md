@@ -18,7 +18,9 @@ scripts/cuda_kmer_sort_reduce_probe.py \
 The probe:
 
 - Extracts canonical `k=31` short k-mers from paired FASTQ/FASTQ.GZ into a
-  binary `u64` stream.
+  binary `u64` stream. The default `--extractor rust` path uses the crate's
+  real parser and k-mer generation code; `--extractor python` is retained as a
+  simple control.
 - Compiles a tiny CUDA/Thrust program with `nvcc`.
 - Compares CPU `std::sort` plus adjacent reduce against GPU
   host-to-device copy, `thrust::sort`, `thrust::reduce_by_key`, and
@@ -26,9 +28,9 @@ The probe:
 - Checks that CPU and GPU reduced `(key, count)` streams match by unique count
   and checksum.
 
-Python FASTQ extraction time is reported separately and should not be treated
-as a GPU backend cost. A production backend would need Rust-side extraction and
-batch transfer.
+Extraction time is reported separately from GPU timing. The Rust extractor is
+still a helper-process feasibility path, but it is close enough to the real
+production shape to make the result useful.
 
 ## Local Results
 
@@ -45,6 +47,16 @@ Input:
 - `tmp/human_benchmark_8threads/human_GRCh38_500k_R2.fq.gz`
 - `k=31`
 
+Rust extractor:
+
+| Read pairs | K-mers | Extract | CPU sort/reduce | GPU total | GPU sort | Match |
+| ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 1,000 | 240,000 | 0.008 s | 12.677 ms | 273.973 ms | 273.394 ms | true |
+| 50,000 | 12,000,000 | 0.250 s | 682.257 ms | 27.748 ms | 8.846 ms | true |
+| 500,000 | 120,000,000 | 2.367 s | 7660.800 ms | 235.400 ms | 66.522 ms | true |
+
+Earlier Python extractor control:
+
 | Read pairs | K-mers | CPU sort/reduce | GPU total | GPU sort | Match |
 | ---: | ---: | ---: | ---: | ---: | --- |
 | 1,000 | 240,000 | 16.803 ms | 337.756 ms | 337.156 ms | true |
@@ -52,10 +64,10 @@ Input:
 | 100,000 | 24,000,000 | 1451.000 ms | 321.488 ms | 284.518 ms | true |
 | 500,000 | 120,000,000 | 7917.670 ms | 517.186 ms | 338.936 ms | true |
 
-The 500k slice shows that GPU sort/reduce is feasible at the same scale as the
-current publish benchmark: 120M canonical k-mers fit in VRAM and reduce
-correctly. The small 1k run loses badly, so a production GPU path should only
-activate above a large batch threshold.
+The 500k Rust-extractor slice shows that GPU sort/reduce is feasible at the
+same scale as the current publish benchmark: 120M canonical k-mers fit in VRAM
+and reduce correctly. The small 1k run loses badly, so a production GPU path
+should only activate above a large batch threshold.
 
 ## Interpretation
 
@@ -69,8 +81,8 @@ The promising path is not direct GPU count-min atomics. It is:
 This preserves the semantics that made deterministic sorted replay publishable,
 while moving the expensive key ordering/reduction stage to the GPU.
 
-The next production-grade experiment should avoid the Python extraction step
-and wire Rust-side k-mer extraction to either:
+The next production-grade experiment should stream Rust-side k-mer batches to
+either:
 
 - a CUDA helper process that consumes binary `u64` batches, or
 - a feature-gated CUDA FFI path.

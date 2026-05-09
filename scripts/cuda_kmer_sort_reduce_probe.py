@@ -191,6 +191,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--keep-kmers", action="store_true")
     parser.add_argument("--nvcc", default=os.environ.get("NVCC", "nvcc"))
     parser.add_argument("--force-rebuild", action="store_true")
+    parser.add_argument(
+        "--extractor",
+        choices=("rust", "python"),
+        default="rust",
+        help="k-mer extraction path; rust uses the crate parser/k-mer semantics",
+    )
+    parser.add_argument(
+        "--gzip-threads",
+        type=int,
+        default=4,
+        help="gzip decoder threads for the Rust extractor; 0 disables threaded gzip",
+    )
     return parser.parse_args()
 
 
@@ -250,7 +262,7 @@ def emit_kmers_for_seq(seq: bytes, k: int, out) -> int:
     return emitted
 
 
-def extract_kmers(args: argparse.Namespace, kmers_path: Path) -> tuple[int, int]:
+def extract_kmers_python(args: argparse.Namespace, kmers_path: Path) -> tuple[int, int, float]:
     started = time.perf_counter()
     reads = 0
     kmers = 0
@@ -270,6 +282,70 @@ def extract_kmers(args: argparse.Namespace, kmers_path: Path) -> tuple[int, int]
             reads += 1
     elapsed = time.perf_counter() - started
     return reads, kmers, elapsed
+
+
+def parse_tsv(stdout: str) -> dict[str, str]:
+    parsed = {}
+    for line in stdout.splitlines():
+        if not line.strip() or "\t" not in line:
+            continue
+        key, value = line.split("\t", 1)
+        parsed[key] = value
+    return parsed
+
+
+def rust_extractor_binary(args: argparse.Namespace) -> Path:
+    binary = ROOT / "target" / "release" / "examples" / "cuda_kmer_extract"
+    if args.force_rebuild or not binary.exists():
+        subprocess.run(
+            ["cargo", "build", "--release", "--example", "cuda_kmer_extract"],
+            cwd=ROOT,
+            check=True,
+        )
+    return binary
+
+
+def extract_kmers_rust(args: argparse.Namespace, kmers_path: Path) -> tuple[int, int, float]:
+    binary = rust_extractor_binary(args)
+    cmd = [
+        str(binary),
+        "--r1",
+        str(args.r1),
+        "--out",
+        str(kmers_path),
+        "--reads",
+        str(args.reads),
+        "--k",
+        str(args.k),
+        "--gzip-threads",
+        str(args.gzip_threads),
+    ]
+    if args.r2:
+        cmd.extend(["--r2", str(args.r2)])
+    completed = subprocess.run(
+        cmd,
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        sys.stderr.write(completed.stdout)
+        sys.stderr.write(completed.stderr)
+        raise subprocess.CalledProcessError(completed.returncode, cmd)
+    parsed = parse_tsv(completed.stdout)
+    return (
+        int(parsed["reads"]),
+        int(parsed["extracted_kmers"]),
+        float(parsed["extract_seconds"]),
+    )
+
+
+def extract_kmers(args: argparse.Namespace, kmers_path: Path) -> tuple[int, int, float]:
+    if args.extractor == "rust":
+        return extract_kmers_rust(args, kmers_path)
+    return extract_kmers_python(args, kmers_path)
 
 
 def build_cuda_binary(args: argparse.Namespace, outdir: Path) -> Path:
@@ -313,6 +389,7 @@ def main() -> int:
     report = [
         f"r1\t{args.r1}",
         f"r2\t{args.r2 if args.r2 else ''}",
+        f"extractor\t{args.extractor}",
         f"k\t{args.k}",
         f"reads\t{reads}",
         f"extracted_kmers\t{kmers}",
