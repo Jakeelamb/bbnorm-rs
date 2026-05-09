@@ -6434,7 +6434,7 @@ fn count_primary_gpu_reduced_runs_sketch(
     config: &Config,
     sketch: &mut PackedCountMinSketch,
 ) -> Result<()> {
-    for_each_gpu_reduced_run(config, |key, count| {
+    for_each_gpu_reduced_chunk_run(config, |key, count| {
         sketch.add_key_count(&key, count);
         sketch.add_key_increments(count);
     })
@@ -6444,13 +6444,13 @@ fn count_primary_gpu_reduced_runs_atomic_sketch(
     config: &Config,
     sketch: &AtomicCountMinSketch,
 ) -> Result<()> {
-    for_each_gpu_reduced_run(config, |key, count| {
+    for_each_gpu_reduced_chunk_run(config, |key, count| {
         sketch.add_key_count(&key, count);
         sketch.add_key_increments(count);
     })
 }
 
-fn for_each_gpu_reduced_run<F>(config: &Config, mut f: F) -> Result<()>
+fn for_each_gpu_reduced_chunk_run<F>(config: &Config, mut f: F) -> Result<()>
 where
     F: FnMut(KmerKey, u64),
 {
@@ -6483,42 +6483,77 @@ where
     let kmers_path = temp_dir.join(format!("bbnorm-rs-gpu-kmers-{token}.u64"));
     let runs_path = temp_dir.join(format!("bbnorm-rs-gpu-runs-{token}.bin"));
     let result = (|| {
-        write_primary_short_kmers(config, &kmers_path)?;
-        let status = Command::new(helper)
-            .arg(&kmers_path)
-            .arg(&runs_path)
-            .status()
-            .with_context(|| format!("running GPU helper {}", helper.display()))?;
-        if !status.success() {
-            bail!("GPU helper failed with status {status}");
+        let mut readers = PrimaryReaders::open(config, config.table_reads)?;
+        let mut chunk = Vec::with_capacity(COUNT_PARALLEL_CHUNK_SIZE);
+        while let Some((r1, r2)) = readers.next_pair()? {
+            chunk.push((r1, r2));
+            if chunk.len() >= COUNT_PARALLEL_CHUNK_SIZE {
+                reduce_gpu_pair_chunk(config, helper, &kmers_path, &runs_path, &chunk, &mut f)?;
+                chunk.clear();
+            }
         }
-        replay_reduced_runs_file(&runs_path, &mut f)
+        if !chunk.is_empty() {
+            reduce_gpu_pair_chunk(config, helper, &kmers_path, &runs_path, &chunk, &mut f)?;
+        }
+        Ok(())
     })();
     let _ = fs::remove_file(&kmers_path);
     let _ = fs::remove_file(&runs_path);
     result
 }
 
-fn write_primary_short_kmers(config: &Config, path: &Path) -> Result<()> {
+fn reduce_gpu_pair_chunk<F>(
+    config: &Config,
+    helper: &Path,
+    kmers_path: &Path,
+    runs_path: &Path,
+    pairs: &[(SequenceRecord, Option<SequenceRecord>)],
+    f: &mut F,
+) -> Result<()>
+where
+    F: FnMut(KmerKey, u64),
+{
+    write_pair_chunk_short_kmers(config, pairs, kmers_path)?;
+    if fs::metadata(kmers_path)?.len() == 0 {
+        return Ok(());
+    }
+    let status = Command::new(helper)
+        .arg(kmers_path)
+        .arg(runs_path)
+        .status()
+        .with_context(|| format!("running GPU helper {}", helper.display()))?;
+    if !status.success() {
+        bail!("GPU helper failed with status {status}");
+    }
+    replay_reduced_runs_file(runs_path, f)?;
+    let _ = fs::remove_file(kmers_path);
+    let _ = fs::remove_file(runs_path);
+    Ok(())
+}
+
+fn write_pair_chunk_short_kmers(
+    config: &Config,
+    pairs: &[(SequenceRecord, Option<SequenceRecord>)],
+    path: &Path,
+) -> Result<()> {
     let mut writer = BufWriter::new(
         fs::File::create(path).with_context(|| format!("create {}", path.display()))?,
     );
-    let mut readers = PrimaryReaders::open(config, config.table_reads)?;
     let mut keys = Vec::new();
-    while let Some((r1, r2)) = readers.next_pair()? {
+    for (r1, r2) in pairs {
         if config.remove_duplicate_kmers {
-            fill_unique_pair_kmers(config, &r1, r2.as_ref(), &mut keys);
+            fill_unique_pair_kmers(config, r1, r2.as_ref(), &mut keys);
             for key in &keys {
                 write_short_kmer_key(&mut writer, key)?;
             }
         } else {
             let mut write_error = None;
-            for_each_kmer_for_record(&r1, config, |key| {
+            for_each_kmer_for_record(r1, config, |key| {
                 if let Err(err) = write_short_kmer_key(&mut writer, &key) {
                     write_error = Some(err);
                 }
             });
-            if let Some(mate) = &r2 {
+            if let Some(mate) = r2 {
                 for_each_kmer_for_record(mate, config, |key| {
                     if let Err(err) = write_short_kmer_key(&mut writer, &key) {
                         write_error = Some(err);
@@ -9389,7 +9424,7 @@ fn increment_atomic_sketch_from_pair_chunk(
         return;
     }
 
-    let chunk_counts = pairs
+    let mut entries = pairs
         .par_iter()
         .fold(
             || count_chunk_local_map(config, pairs),
@@ -9404,12 +9439,30 @@ fn increment_atomic_sketch_from_pair_chunk(
                 local_counts
             },
         )
-        .reduce(CountMap::default, |mut left, right| {
-            merge_count_maps(&mut left, right);
+        .map(|counts| counts.into_iter().collect::<Vec<_>>())
+        .reduce(Vec::new, |mut left, mut right| {
+            left.append(&mut right);
             left
         });
-    let key_increments = chunk_counts.values().copied().sum();
-    sketch.add_key_counts(&chunk_counts);
+    entries.par_sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+
+    let mut key_increments = 0u64;
+    let mut iter = entries.into_iter();
+    let Some((mut current_key, mut current_count)) = iter.next() else {
+        return;
+    };
+    for (key, count) in iter {
+        if key == current_key {
+            current_count = current_count.saturating_add(count);
+        } else {
+            key_increments = key_increments.saturating_add(current_count);
+            sketch.add_key_count(&current_key, current_count);
+            current_key = key;
+            current_count = count;
+        }
+    }
+    key_increments = key_increments.saturating_add(current_count);
+    sketch.add_key_count(&current_key, current_count);
     sketch.add_key_increments(key_increments);
 }
 
