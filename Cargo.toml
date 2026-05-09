@@ -14,6 +14,9 @@ include = [
     "/LICENSE",
     "/README.md",
     "/docs/**",
+    "/scripts/build_cuda_kmer_reduce_runs.sh",
+    "/scripts/cuda_kmer_reduce_runs.cu",
+    "/scripts/cuda_kmer_reduce_runs_persistent.cu",
     "/src/**",
     "/tests/basic.rs",
 ]

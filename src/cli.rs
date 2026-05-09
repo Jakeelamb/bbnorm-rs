@@ -216,6 +216,7 @@ pub struct Config {
     pub locked_increment: Option<bool>,
     pub gpu_counting: bool,
     pub gpu_helper: Option<PathBuf>,
+    pub gpu_persistent: bool,
     pub notes: Vec<String>,
 }
 
@@ -384,6 +385,7 @@ impl Default for Config {
             locked_increment: None,
             gpu_counting: false,
             gpu_helper: None,
+            gpu_persistent: false,
             notes: Vec::new(),
         }
     }
@@ -1384,6 +1386,12 @@ fn handle_key_value(config: &mut Config, key: &str, value: &str) -> Result<()> {
             config.gpu_helper = Some(PathBuf::from(value));
             config.notes.push(format!(
                 "{key}={value} selects the experimental CUDA k-mer reduce helper"
+            ));
+        }
+        "gpupersistent" | "gpucountingpersistent" | "persistentgpuhelper" => {
+            config.gpu_persistent = parse_bool(value, key)?;
+            config.notes.push(format!(
+                "{key}={value} toggles the experimental persistent CUDA helper protocol"
             ));
         }
         "simd" => {
@@ -5010,12 +5018,14 @@ mod tests {
             "in=reads.fq",
             "gpucounting=t",
             "gpuhelper=tmp/cuda_kmer_reduce_runs",
+            "gpupersistent=t",
         ]);
         assert!(cfg.gpu_counting);
         assert_eq!(
             cfg.gpu_helper,
             Some(PathBuf::from("tmp/cuda_kmer_reduce_runs"))
         );
+        assert!(cfg.gpu_persistent);
         assert!(
             cfg.notes
                 .iter()

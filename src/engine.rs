@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BinaryHeap};
 use std::fs;
 use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{
     Mutex, OnceLock,
     atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
@@ -6484,16 +6484,31 @@ where
     let runs_path = temp_dir.join(format!("bbnorm-rs-gpu-runs-{token}.bin"));
     let result = (|| {
         let mut readers = PrimaryReaders::open(config, config.table_reads)?;
+        let mut persistent = config
+            .gpu_persistent
+            .then(|| PersistentGpuReducer::start(helper))
+            .transpose()?;
         let mut chunk = Vec::with_capacity(COUNT_PARALLEL_CHUNK_SIZE);
         while let Some((r1, r2)) = readers.next_pair()? {
             chunk.push((r1, r2));
             if chunk.len() >= COUNT_PARALLEL_CHUNK_SIZE {
-                reduce_gpu_pair_chunk(config, helper, &kmers_path, &runs_path, &chunk, &mut f)?;
+                if let Some(reducer) = &mut persistent {
+                    reduce_gpu_pair_chunk_persistent(config, reducer, &chunk, &mut f)?;
+                } else {
+                    reduce_gpu_pair_chunk(config, helper, &kmers_path, &runs_path, &chunk, &mut f)?;
+                }
                 chunk.clear();
             }
         }
         if !chunk.is_empty() {
-            reduce_gpu_pair_chunk(config, helper, &kmers_path, &runs_path, &chunk, &mut f)?;
+            if let Some(reducer) = &mut persistent {
+                reduce_gpu_pair_chunk_persistent(config, reducer, &chunk, &mut f)?;
+            } else {
+                reduce_gpu_pair_chunk(config, helper, &kmers_path, &runs_path, &chunk, &mut f)?;
+            }
+        }
+        if let Some(reducer) = persistent {
+            reducer.finish()?;
         }
         Ok(())
     })();
@@ -6531,6 +6546,23 @@ where
     Ok(())
 }
 
+fn reduce_gpu_pair_chunk_persistent<F>(
+    config: &Config,
+    reducer: &mut PersistentGpuReducer,
+    pairs: &[(SequenceRecord, Option<SequenceRecord>)],
+    f: &mut F,
+) -> Result<()>
+where
+    F: FnMut(KmerKey, u64),
+{
+    let mut keys = Vec::new();
+    collect_pair_chunk_short_kmers(config, pairs, &mut keys)?;
+    if keys.is_empty() {
+        return Ok(());
+    }
+    reducer.reduce(&keys, f)
+}
+
 fn write_pair_chunk_short_kmers(
     config: &Config,
     pairs: &[(SequenceRecord, Option<SequenceRecord>)],
@@ -6540,22 +6572,39 @@ fn write_pair_chunk_short_kmers(
         fs::File::create(path).with_context(|| format!("create {}", path.display()))?,
     );
     let mut keys = Vec::new();
+    collect_pair_chunk_short_kmers(config, pairs, &mut keys)?;
+    for raw in keys {
+        writer.write_all(&raw.to_le_bytes())?;
+    }
+    writer.flush()?;
+    Ok(())
+}
+
+fn collect_pair_chunk_short_kmers(
+    config: &Config,
+    pairs: &[(SequenceRecord, Option<SequenceRecord>)],
+    out: &mut Vec<u64>,
+) -> Result<()> {
+    out.clear();
+    let mut keys = Vec::new();
     for (r1, r2) in pairs {
         if config.remove_duplicate_kmers {
             fill_unique_pair_kmers(config, r1, r2.as_ref(), &mut keys);
             for key in &keys {
-                write_short_kmer_key(&mut writer, key)?;
+                out.push(short_kmer_raw(key)?);
             }
         } else {
             let mut write_error = None;
-            for_each_kmer_for_record(r1, config, |key| {
-                if let Err(err) = write_short_kmer_key(&mut writer, &key) {
+            for_each_kmer_for_record(r1, config, |key| match short_kmer_raw(&key) {
+                Ok(raw) => out.push(raw),
+                Err(err) => {
                     write_error = Some(err);
                 }
             });
             if let Some(mate) = r2 {
-                for_each_kmer_for_record(mate, config, |key| {
-                    if let Err(err) = write_short_kmer_key(&mut writer, &key) {
+                for_each_kmer_for_record(mate, config, |key| match short_kmer_raw(&key) {
+                    Ok(raw) => out.push(raw),
+                    Err(err) => {
                         write_error = Some(err);
                     }
                 });
@@ -6565,16 +6614,86 @@ fn write_pair_chunk_short_kmers(
             }
         }
     }
-    writer.flush()?;
     Ok(())
 }
 
-fn write_short_kmer_key(writer: &mut impl Write, key: &KmerKey) -> Result<()> {
+fn short_kmer_raw(key: &KmerKey) -> Result<u64> {
     let KmerKey::Short(raw) = key else {
         bail!("GPU counting helper only accepts short k-mer keys");
     };
-    writer.write_all(&raw.to_le_bytes())?;
-    Ok(())
+    Ok(*raw)
+}
+
+struct PersistentGpuReducer {
+    child: Child,
+    stdin: BufWriter<ChildStdin>,
+    stdout: BufReader<ChildStdout>,
+}
+
+impl PersistentGpuReducer {
+    fn start(helper: &Path) -> Result<Self> {
+        let mut child = Command::new(helper)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .with_context(|| format!("starting persistent GPU helper {}", helper.display()))?;
+        let stdin = child
+            .stdin
+            .take()
+            .context("persistent GPU helper stdin was not piped")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("persistent GPU helper stdout was not piped")?;
+        Ok(Self {
+            child,
+            stdin: BufWriter::new(stdin),
+            stdout: BufReader::new(stdout),
+        })
+    }
+
+    fn reduce<F>(&mut self, keys: &[u64], f: &mut F) -> Result<()>
+    where
+        F: FnMut(KmerKey, u64),
+    {
+        let count = keys.len() as u64;
+        self.stdin.write_all(&count.to_le_bytes())?;
+        for key in keys {
+            self.stdin.write_all(&key.to_le_bytes())?;
+        }
+        self.stdin.flush()?;
+
+        let mut unique_buf = [0u8; 8];
+        self.stdout
+            .read_exact(&mut unique_buf)
+            .context("reading persistent GPU helper unique count")?;
+        let unique = u64::from_le_bytes(unique_buf);
+        let mut record = [0u8; 12];
+        for _ in 0..unique {
+            self.stdout
+                .read_exact(&mut record)
+                .context("reading persistent GPU helper reduced run")?;
+            let key = u64::from_le_bytes(record[0..8].try_into().unwrap());
+            let count = u32::from_le_bytes(record[8..12].try_into().unwrap());
+            f(KmerKey::Short(key), u64::from(count));
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<()> {
+        self.stdin.write_all(&u64::MAX.to_le_bytes())?;
+        self.stdin.flush()?;
+        drop(self.stdin);
+        let status = self
+            .child
+            .wait()
+            .context("waiting for persistent GPU helper")?;
+        if !status.success() {
+            bail!("persistent GPU helper failed with status {status}");
+        }
+        Ok(())
+    }
 }
 
 fn replay_reduced_runs_file<F>(path: &Path, f: &mut F) -> Result<()>
