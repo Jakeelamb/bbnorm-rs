@@ -53,6 +53,7 @@ These were tested after the profile and rejected:
 | `COUNT_PARALLEL_CHUNK_SIZE=16384` | 20.848s | Rejected; worse than 8192 |
 | Raw short-kmer vector sort/reduce | 20.640s | Rejected; lower RSS but slower in the publish harness |
 | Sharded raw short-kmer exact counter | 25.040s | Rejected; byte-identical output, lower RSS, but much slower input counting |
+| Specialized 16-bit positive cell-transition helper | 27.041s | Rejected; microbench was noisy and publish harness regressed badly |
 
 All rejected attempts preserved output shape in focused checks, but none beat
 the existing benchmark median. They should not be reintroduced without a new
@@ -74,7 +75,8 @@ algorithmic change:
    `scripts/benchmark_trustworthy_baseline.py`; ad hoc timing loops were too
    optimistic for this change.
 
-The useful lesson from the raw short-kmer and sharded exact-counter
-experiments is that removing `FxHashMap<KmerKey, u64>` can reduce memory, but
-extra run formation, per-shard maps, and merge work are expensive enough to
-lose badly in the publish lane.
+The useful lesson from the raw short-kmer, sharded exact-counter, and tiny
+packed-kernel specialization experiments is that plausible local simplifications
+can reduce memory or look neutral in isolation while still losing badly in the
+publish lane. The next packed-sketch attempt should be backed by a stable kernel
+microbenchmark and then immediately checked with the full harness.

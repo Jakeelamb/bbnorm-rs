@@ -12152,6 +12152,38 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "microbenchmark for packed 16-bit/3-hash sketch kernel"]
+    fn bench_packed_count_min_16bit_3hash_short_kernel() {
+        let mut sketch = PackedCountMinSketch::new_with_min_arrays_and_mask_seed(
+            67_108_859,
+            3,
+            16,
+            BBTOOLS_KCOUNT_ARRAY_MIN_ARRAYS,
+            BBTOOLS_KCOUNT_ARRAY_FIRST_MASK_SEED,
+        )
+        .unwrap();
+        let keys = (0..1_000_000u64)
+            .map(|i| KmerKey::Short(i.wrapping_mul(0x9e37_79b9_7f4a_7c15)))
+            .collect::<Vec<_>>();
+
+        let start = Instant::now();
+        let mut checksum = 0u64;
+        for key in &keys {
+            checksum ^= std::hint::black_box(
+                sketch.increment_16bit_3hash_conservative_and_return_unincremented(key, 1),
+            );
+        }
+        let elapsed = start.elapsed();
+        eprintln!(
+            "packed_16bit_3hash_short_kernel\tupdates={}\telapsed_seconds={:.6}\tchecksum={}",
+            keys.len(),
+            elapsed.as_secs_f64(),
+            checksum
+        );
+        std::hint::black_box(sketch);
+    }
+
+    #[test]
     fn atomic_count_min_reduced_sorted_replay_matches_individual_kmer_updates() {
         let keys = [
             KmerKey::Short(13),
