@@ -12909,8 +12909,12 @@ mod tests {
             increment_pair_counts(&config, &mut pair_counts, r1, r2.as_ref());
             merge_count_maps(&mut merged_counts, pair_counts);
         }
-        let key_increments = merged_counts.values().copied().sum();
-        sequential.add_key_counts(&merged_counts);
+        let mut entries = merged_counts.into_iter().collect::<Vec<_>>();
+        entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        let key_increments = entries.iter().map(|(_, count)| *count).sum();
+        for (key, count) in entries {
+            sequential.add_key_count(&key, count);
+        }
         sequential.add_key_increments(key_increments);
         let chunked = new_atomic_count_min_sketch(&config).unwrap();
 

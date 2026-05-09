@@ -132,18 +132,30 @@ Java/Rust histogram drift, and aggregate p10/median/p90 summaries. See
 Java-default and packed 16-bit benchmark lanes.
 
 The `v0.1.2` performance patch improves deterministic packed bounded counting
-on the local 500k paired-human packed 16-bit lane:
+on the local 500k paired-human packed 16-bit lane. A final 3-repeat refresh at
+`tmp/trustworthy_baseline_500k_bits16_final_20260508` measured the current
+deterministic Rust median at 19.786s wall time, 14.726s input counting, and
+3.04 GiB RSS; the Java median for the same lane was 8.387s wall time and
+3.41 GiB RSS.
 
 | Variant | Before | After | Change |
 | --- | ---: | ---: | ---: |
-| Rust deterministic wall time | 24.104s | 19.895s | 17.5% faster |
-| Rust deterministic input counting | 19.038s | 14.825s | 22.1% faster |
-| Rust deterministic max RSS | 3.41 GiB | 3.09 GiB | 9.5% lower |
+| Rust deterministic wall time | 24.104s | 19.786s | 17.9% faster |
+| Rust deterministic input counting | 19.038s | 14.726s | 22.7% faster |
+| Rust deterministic max RSS | 3.41 GiB | 3.04 GiB | 10.9% lower |
 
 Those measurements compare `tmp/trustworthy_baseline_500k_bits16_20260508`
-against `tmp/trustworthy_baseline_500k_bits16_raw_bucket_20260508`, with 3
-repeats per variant, null read outputs, `bits=16`, `reads=500000`, and
+against `tmp/trustworthy_baseline_500k_bits16_final_20260508`, with 3 repeats
+per variant, null read outputs, `bits=16`, `reads=500000`, and
 `tablereads=500000`.
+
+Experimental GPU counting is documented in
+[`docs/gpu_counting_integration.md`](docs/gpu_counting_integration.md). The
+parity-safe GPU path must preserve deterministic chunk replay order; naive
+global GPU reduction is faster-looking but semantically wrong for conservative
+count-min updates. The current persistent CUDA helper is byte-identical to Rust
+CPU on the tested lanes but remains slower than the CPU path, so it is kept
+behind explicit `gpucounting=t gpupersistent=t` flags.
 
 ## Repository Layout
 
