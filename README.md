@@ -72,8 +72,9 @@ Known gaps remain:
   not complete.
 - ECC and overlap behavior is covered by compact and biological stress tests,
   but not every BBMerge/BBNorm edge case.
-- Large human-read benchmarks show excellent memory usage, but input counting
-  remains the main speed bottleneck in some comparable modes.
+- Large human-read benchmarks show improved deterministic bounded counting and
+  excellent memory usage, but input counting remains the main speed bottleneck
+  in some comparable modes.
 
 See [docs/parity.md](docs/parity.md) and
 [docs/component_buildout.md](docs/component_buildout.md) for the detailed
@@ -129,6 +130,20 @@ It records git/tool/input metadata, command lines, raw run data, stage timings,
 Java/Rust histogram drift, and aggregate p10/median/p90 summaries. See
 [`docs/trustworthy_benchmarking.md`](docs/trustworthy_benchmarking.md) for the
 Java-default and packed 16-bit benchmark lanes.
+
+The `v0.1.2` performance patch improves deterministic packed bounded counting
+on the local 500k paired-human packed 16-bit lane:
+
+| Variant | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| Rust deterministic wall time | 24.104s | 19.895s | 17.5% faster |
+| Rust deterministic input counting | 19.038s | 14.825s | 22.1% faster |
+| Rust deterministic max RSS | 3.41 GiB | 3.09 GiB | 9.5% lower |
+
+Those measurements compare `tmp/trustworthy_baseline_500k_bits16_20260508`
+against `tmp/trustworthy_baseline_500k_bits16_raw_bucket_20260508`, with 3
+repeats per variant, null read outputs, `bits=16`, `reads=500000`, and
+`tablereads=500000`.
 
 ## Repository Layout
 
