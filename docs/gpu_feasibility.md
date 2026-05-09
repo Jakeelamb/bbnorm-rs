@@ -10,6 +10,8 @@ Use:
 
 ```bash
 scripts/cuda_kmer_sort_reduce_probe.py \
+  --extractor rust \
+  --stream \
   --reads 500000 \
   --outdir tmp/cuda_probe_500k_$(date +%Y%m%d) \
   --force-rebuild
@@ -21,10 +23,12 @@ The probe:
   binary `u64` stream. The default `--extractor rust` path uses the crate's
   real parser and k-mer generation code; `--extractor python` is retained as a
   simple control.
-- Compiles a tiny CUDA/Thrust program with `nvcc`.
+- Compiles a tiny CUDA/CUB program with `nvcc`.
 - Compares CPU `std::sort` plus adjacent reduce against GPU
-  host-to-device copy, `thrust::sort`, `thrust::reduce_by_key`, and
-  device-to-host copy.
+  host-to-device copy, CUB radix sort, CUB run-length encode, and device-to-host
+  copy.
+- Supports `--stream`, which pipes Rust extractor stdout directly into the CUDA
+  helper instead of requiring an intermediate `.u64` file.
 - Checks that CPU and GPU reduced `(key, count)` streams match by unique count
   and checksum.
 
@@ -47,7 +51,26 @@ Input:
 - `tmp/human_benchmark_8threads/human_GRCh38_500k_R2.fq.gz`
 - `k=31`
 
-Rust extractor:
+CUB helper with Rust extractor:
+
+| Read pairs | K-mers | Extract | CPU sort/reduce | GPU total | GPU sort | Match |
+| ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 1,000 | 240,000 | 0.009 s | 17.536 ms | 0.697 ms | 0.185 ms | true |
+| 50,000 | 12,000,000 | 0.269 s | 688.053 ms | 24.977 ms | 6.462 ms | true |
+| 500,000 | 120,000,000 | 2.462 s | 7890.760 ms | 242.999 ms | 64.580 ms | true |
+
+CUB streaming mode after correctness was established, with
+`--skip-cpu-reference`:
+
+| Read pairs | K-mers | Extract | Pipeline wall | GPU total | GPU sort | Match |
+| ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 500,000 | 120,000,000 | 2.898 s | 3.833 s | 243.430 ms | 64.571 ms | not checked |
+
+The streaming checksum `5943999645108915372` matches the verified CUB 500k
+checksum above; `--skip-cpu-reference` only skips the redundant helper-side CPU
+sort/reduce.
+
+Earlier Thrust helper with Rust extractor:
 
 | Read pairs | K-mers | Extract | CPU sort/reduce | GPU total | GPU sort | Match |
 | ---: | ---: | ---: | ---: | ---: | ---: | --- |
@@ -66,8 +89,9 @@ Earlier Python extractor control:
 
 The 500k Rust-extractor slice shows that GPU sort/reduce is feasible at the
 same scale as the current publish benchmark: 120M canonical k-mers fit in VRAM
-and reduce correctly. The small 1k run loses badly, so a production GPU path
-should only activate above a large batch threshold.
+and reduce correctly. CUB removes most of the small-run GPU fixed cost, but a
+production path should still threshold on batch size because extraction,
+transfer, allocation, and replay overhead dominate small inputs.
 
 ## Interpretation
 
@@ -81,8 +105,8 @@ The promising path is not direct GPU count-min atomics. It is:
 This preserves the semantics that made deterministic sorted replay publishable,
 while moving the expensive key ordering/reduction stage to the GPU.
 
-The next production-grade experiment should stream Rust-side k-mer batches to
-either:
+The next production-grade experiment should avoid the helper-process pipe and
+wire Rust-side k-mer batches to either:
 
 - a CUDA helper process that consumes binary `u64` batches, or
 - a feature-gated CUDA FFI path.

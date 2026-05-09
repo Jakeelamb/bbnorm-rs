@@ -4,7 +4,7 @@ use bbnorm_rs::kmer::{KmerKey, for_each_kmer_for_record};
 use bbnorm_rs::seqio::{QualitySettings, SequenceReader, SequenceSettings};
 use std::env;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Write, stderr};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -97,9 +97,14 @@ fn main() -> Result<()> {
                 .with_context(|| format!("open R2 {}", path.display()))
         })
         .transpose()?;
-    let mut writer = BufWriter::new(
-        File::create(&args.out).with_context(|| format!("create {}", args.out.display()))?,
-    );
+    let out_is_stdout = args.out == PathBuf::from("-");
+    let mut writer: Box<dyn Write> = if out_is_stdout {
+        Box::new(BufWriter::new(std::io::stdout()))
+    } else {
+        let file =
+            File::create(&args.out).with_context(|| format!("create {}", args.out.display()))?;
+        Box::new(BufWriter::new(file))
+    };
 
     let mut reads = 0u64;
     let mut kmers = 0u64;
@@ -118,10 +123,19 @@ fn main() -> Result<()> {
     }
     writer.flush()?;
 
-    println!("extractor\trust");
-    println!("reads\t{reads}");
-    println!("extracted_kmers\t{kmers}");
-    println!("extract_seconds\t{:.6}", started.elapsed().as_secs_f64());
+    let extract_seconds = started.elapsed().as_secs_f64();
+    if out_is_stdout {
+        let mut stats = stderr().lock();
+        writeln!(stats, "extractor\trust")?;
+        writeln!(stats, "reads\t{reads}")?;
+        writeln!(stats, "extracted_kmers\t{kmers}")?;
+        writeln!(stats, "extract_seconds\t{extract_seconds:.6}")?;
+    } else {
+        println!("extractor\trust");
+        println!("reads\t{reads}");
+        println!("extracted_kmers\t{kmers}");
+        println!("extract_seconds\t{extract_seconds:.6}");
+    }
     Ok(())
 }
 
