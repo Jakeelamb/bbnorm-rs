@@ -214,6 +214,8 @@ pub struct Config {
     pub count_min_bits_first: Option<u8>,
     pub prefilter: PrefilterSettings,
     pub locked_increment: Option<bool>,
+    pub gpu_counting: bool,
+    pub gpu_helper: Option<PathBuf>,
     pub notes: Vec<String>,
 }
 
@@ -380,6 +382,8 @@ impl Default for Config {
             count_min_bits_first: None,
             prefilter: PrefilterSettings::default(),
             locked_increment: None,
+            gpu_counting: false,
+            gpu_helper: None,
             notes: Vec::new(),
         }
     }
@@ -1368,6 +1372,18 @@ fn handle_key_value(config: &mut Config, key: &str, value: &str) -> Result<()> {
             }
             config.notes.push(format!(
                 "{key}={value} is a BBTools KCountArray write-symmetry control; bounded Rust sketches use the matching locked/conservative update mode when applicable"
+            ));
+        }
+        "gpucounting" | "gpu_counting" | "usegpu" => {
+            config.gpu_counting = parse_bool(value, key)?;
+            config.notes.push(format!(
+                "{key}={value} toggles experimental CUDA sort/reduce-assisted input counting; defaults remain CPU-only"
+            ));
+        }
+        "gpuhelper" | "cudahelper" | "gpucountinghelper" => {
+            config.gpu_helper = Some(PathBuf::from(value));
+            config.notes.push(format!(
+                "{key}={value} selects the experimental CUDA k-mer reduce helper"
             ));
         }
         "simd" => {
@@ -4986,6 +5002,25 @@ mod tests {
         let cfg = parse(&["in=x.fq", "countup=f"]);
         assert!(!cfg.count_up);
         assert!(cfg.notes.iter().any(|note| note.contains("countup=f")));
+    }
+
+    #[test]
+    fn parses_experimental_gpu_counting_controls() {
+        let cfg = parse(&[
+            "in=reads.fq",
+            "gpucounting=t",
+            "gpuhelper=tmp/cuda_kmer_reduce_runs",
+        ]);
+        assert!(cfg.gpu_counting);
+        assert_eq!(
+            cfg.gpu_helper,
+            Some(PathBuf::from("tmp/cuda_kmer_reduce_runs"))
+        );
+        assert!(
+            cfg.notes
+                .iter()
+                .any(|note| note.contains("experimental CUDA"))
+        );
     }
 
     #[test]

@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BinaryHeap};
 use std::fs;
 use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{
     Mutex, OnceLock,
     atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
@@ -3736,10 +3737,18 @@ fn use_bounded_input_sketch(config: &Config) -> bool {
         || automatic_count_min_should_use(config)
 }
 
+fn gpu_counting_supported(config: &Config) -> bool {
+    config.gpu_counting
+        && config.gpu_helper.is_some()
+        && config.k <= 31
+        && !use_prefilter_collision_estimates(config)
+}
+
 fn build_sketch_input_counts(
     config: &Config,
     stage_timings: &mut Vec<StageTiming>,
 ) -> Result<InputCounts> {
+    validate_gpu_counting_request(config)?;
     if use_prefilter_collision_estimates(config) {
         let started = Instant::now();
         let mut prefilter = new_input_prefilter_count_min_sketch(config)?;
@@ -3808,7 +3817,11 @@ fn build_sketch_input_counts(
     if use_atomic_count_min_sketch(config) {
         let started = Instant::now();
         let sketch = new_atomic_count_min_sketch(config)?;
-        count_primary_atomic_sketch(config, &sketch, None)?;
+        if gpu_counting_supported(config) {
+            count_primary_gpu_reduced_runs_atomic_sketch(config, &sketch)?;
+        } else {
+            count_primary_atomic_sketch(config, &sketch, None)?;
+        }
         for extra in &config.extra {
             count_single_file_atomic_sketch(config, extra, &sketch, None, None)?;
         }
@@ -3817,12 +3830,35 @@ fn build_sketch_input_counts(
     }
     let started = Instant::now();
     let mut sketch = new_bounded_count_min_sketch(config)?;
-    count_primary_sketch(config, &mut sketch, None)?;
+    if gpu_counting_supported(config) {
+        count_primary_gpu_reduced_runs_sketch(config, &mut sketch)?;
+    } else {
+        count_primary_sketch(config, &mut sketch, None)?;
+    }
     for extra in &config.extra {
         count_single_file_sketch(config, extra, &mut sketch, None, None)?;
     }
     record_stage_timing(stage_timings, "input_main_counting", started);
     Ok(InputCounts::Sketch(sketch))
+}
+
+fn validate_gpu_counting_request(config: &Config) -> Result<()> {
+    if !config.gpu_counting {
+        return Ok(());
+    }
+    ensure!(
+        config.gpu_helper.is_some(),
+        "gpucounting=t requires gpuhelper=<cuda_kmer_reduce_runs binary>"
+    );
+    ensure!(
+        config.k <= 31,
+        "gpucounting=t currently supports short k-mers only (k<=31)"
+    );
+    ensure!(
+        !use_prefilter_collision_estimates(config),
+        "gpucounting=t currently supports the main bounded sketch without prefilter=t"
+    );
+    Ok(())
 }
 
 fn new_output_counts(config: &Config) -> Result<OutputCounts> {
@@ -6390,6 +6426,139 @@ fn count_primary_atomic_sketch(
     }
     if !chunk.is_empty() {
         increment_atomic_sketch_from_pair_chunk(config, sketch, &chunk, prefilter);
+    }
+    Ok(())
+}
+
+fn count_primary_gpu_reduced_runs_sketch(
+    config: &Config,
+    sketch: &mut PackedCountMinSketch,
+) -> Result<()> {
+    for_each_gpu_reduced_run(config, |key, count| {
+        sketch.add_key_count(&key, count);
+        sketch.add_key_increments(count);
+    })
+}
+
+fn count_primary_gpu_reduced_runs_atomic_sketch(
+    config: &Config,
+    sketch: &AtomicCountMinSketch,
+) -> Result<()> {
+    for_each_gpu_reduced_run(config, |key, count| {
+        sketch.add_key_count(&key, count);
+        sketch.add_key_increments(count);
+    })
+}
+
+fn for_each_gpu_reduced_run<F>(config: &Config, mut f: F) -> Result<()>
+where
+    F: FnMut(KmerKey, u64),
+{
+    let helper = config
+        .gpu_helper
+        .as_ref()
+        .context("gpucounting=t requires gpuhelper=<cuda_kmer_reduce_runs binary>")?;
+    if !helper.exists() {
+        bail!("gpuhelper does not exist: {}", helper.display());
+    }
+    ensure!(
+        config.k <= 31,
+        "gpucounting=t currently supports short k-mers only (k<=31)"
+    );
+    ensure!(
+        !use_prefilter_collision_estimates(config),
+        "gpucounting=t currently supports the main bounded sketch without prefilter=t"
+    );
+    let temp_dir = config.temp_dir.clone().unwrap_or_else(std::env::temp_dir);
+    fs::create_dir_all(&temp_dir)
+        .with_context(|| format!("creating GPU counting temp dir {}", temp_dir.display()))?;
+    let token = format!(
+        "{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let kmers_path = temp_dir.join(format!("bbnorm-rs-gpu-kmers-{token}.u64"));
+    let runs_path = temp_dir.join(format!("bbnorm-rs-gpu-runs-{token}.bin"));
+    let result = (|| {
+        write_primary_short_kmers(config, &kmers_path)?;
+        let status = Command::new(helper)
+            .arg(&kmers_path)
+            .arg(&runs_path)
+            .status()
+            .with_context(|| format!("running GPU helper {}", helper.display()))?;
+        if !status.success() {
+            bail!("GPU helper failed with status {status}");
+        }
+        replay_reduced_runs_file(&runs_path, &mut f)
+    })();
+    let _ = fs::remove_file(&kmers_path);
+    let _ = fs::remove_file(&runs_path);
+    result
+}
+
+fn write_primary_short_kmers(config: &Config, path: &Path) -> Result<()> {
+    let mut writer = BufWriter::new(
+        fs::File::create(path).with_context(|| format!("create {}", path.display()))?,
+    );
+    let mut readers = PrimaryReaders::open(config, config.table_reads)?;
+    let mut keys = Vec::new();
+    while let Some((r1, r2)) = readers.next_pair()? {
+        if config.remove_duplicate_kmers {
+            fill_unique_pair_kmers(config, &r1, r2.as_ref(), &mut keys);
+            for key in &keys {
+                write_short_kmer_key(&mut writer, key)?;
+            }
+        } else {
+            let mut write_error = None;
+            for_each_kmer_for_record(&r1, config, |key| {
+                if let Err(err) = write_short_kmer_key(&mut writer, &key) {
+                    write_error = Some(err);
+                }
+            });
+            if let Some(mate) = &r2 {
+                for_each_kmer_for_record(mate, config, |key| {
+                    if let Err(err) = write_short_kmer_key(&mut writer, &key) {
+                        write_error = Some(err);
+                    }
+                });
+            }
+            if let Some(err) = write_error {
+                return Err(err);
+            }
+        }
+    }
+    writer.flush()?;
+    Ok(())
+}
+
+fn write_short_kmer_key(writer: &mut impl Write, key: &KmerKey) -> Result<()> {
+    let KmerKey::Short(raw) = key else {
+        bail!("GPU counting helper only accepts short k-mer keys");
+    };
+    writer.write_all(&raw.to_le_bytes())?;
+    Ok(())
+}
+
+fn replay_reduced_runs_file<F>(path: &Path, f: &mut F) -> Result<()>
+where
+    F: FnMut(KmerKey, u64),
+{
+    let mut reader =
+        BufReader::new(fs::File::open(path).with_context(|| format!("open {}", path.display()))?);
+    let mut record = [0u8; 12];
+    loop {
+        match reader.read_exact(&mut record) {
+            Ok(()) => {
+                let key = u64::from_le_bytes(record[0..8].try_into().unwrap());
+                let count = u32::from_le_bytes(record[8..12].try_into().unwrap());
+                f(KmerKey::Short(key), u64::from(count));
+            }
+            Err(err) if err.kind() == ErrorKind::UnexpectedEof => break,
+            Err(err) => return Err(err).context("reading GPU reduced runs"),
+        }
     }
     Ok(())
 }

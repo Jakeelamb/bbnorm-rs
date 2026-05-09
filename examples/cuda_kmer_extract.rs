@@ -5,7 +5,7 @@ use bbnorm_rs::seqio::{QualitySettings, SequenceReader, SequenceSettings};
 use std::env;
 use std::fs::File;
 use std::io::{BufWriter, Write, stderr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 #[derive(Debug)]
@@ -97,7 +97,7 @@ fn main() -> Result<()> {
                 .with_context(|| format!("open R2 {}", path.display()))
         })
         .transpose()?;
-    let out_is_stdout = args.out == PathBuf::from("-");
+    let out_is_stdout = args.out == Path::new("-");
     let mut writer: Box<dyn Write> = if out_is_stdout {
         Box::new(BufWriter::new(std::io::stdout()))
     } else {
