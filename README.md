@@ -118,11 +118,14 @@ hot path. `countup=t` is tracked separately as an accepted Rust-over-Java
 divergence guard rather than normal Java parity.
 
 For high-throughput bounded approximate runs where byte-stable collision order
-is less important than speed, `deterministic=f` enables direct parallel sketch
-updates. On the local 50k human-pair no-output benchmark, default deterministic
-mode measured 3.18s / 0.87 GiB RSS after chunk-size tuning, while
-`deterministic=f` measured 1.42s / 0.40 GiB RSS with the same read limit and
-memory settings.
+is less important than speed, `deterministic=f` enables direct atomic packed
+sketch updates and fuses input histogram collection into the normalization pass.
+On the local 500k paired-human packed 16-bit lane at
+`tmp/fastlane_atomic_packed_fusedhist_500k_compare_20260515_115057`, the
+3-repeat median was 6.769s / 2.79 GiB RSS for Rust versus 7.814s / 3.39 GiB
+RSS for Java. That is 13.4% faster wall time and 17.8% lower peak RSS on the
+same input, read limits, `bits=16`, null read outputs, `hist`, and `rhist`
+benchmark lane.
 
 For repeatable current baselines, use
 [`scripts/benchmark_trustworthy_baseline.py`](scripts/benchmark_trustworthy_baseline.py).

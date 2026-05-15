@@ -138,6 +138,7 @@ enum InputCounts {
     Exact(CountMap),
     Sketch(PackedCountMinSketch),
     AtomicSketch(AtomicCountMinSketch),
+    AtomicPackedSketch(AtomicPackedCountMinSketch),
     PrefilteredSketch {
         prefilter: PrefilterCountMinSketch,
         limit: u64,
@@ -170,6 +171,7 @@ impl CountLookup for InputCounts {
             Self::Exact(counts) => counts.depth(key),
             Self::Sketch(sketch) => sketch.depth(key),
             Self::AtomicSketch(sketch) => sketch.depth(key),
+            Self::AtomicPackedSketch(sketch) => sketch.depth(key),
             Self::PrefilteredSketch {
                 prefilter,
                 limit,
@@ -190,6 +192,7 @@ impl CountLookup for InputCounts {
             Self::Exact(counts) => counts.unique_kmers(),
             Self::Sketch(sketch) => sketch.unique_kmers(),
             Self::AtomicSketch(sketch) => sketch.unique_kmers(),
+            Self::AtomicPackedSketch(sketch) => sketch.unique_kmers(),
             Self::PrefilteredSketch { prefilter, .. } => prefilter.unique_kmers(),
         }
     }
@@ -199,6 +202,7 @@ impl CountLookup for InputCounts {
             Self::Exact(counts) => counts.unique_kmers_at_least(min_depth),
             Self::Sketch(sketch) => sketch.unique_kmers_at_least(min_depth),
             Self::AtomicSketch(sketch) => sketch.unique_kmers_at_least(min_depth),
+            Self::AtomicPackedSketch(sketch) => sketch.unique_kmers_at_least(min_depth),
             Self::PrefilteredSketch {
                 prefilter,
                 limit,
@@ -254,6 +258,7 @@ impl InputCounts {
             Self::Exact(_) => {}
             Self::Sketch(sketch) => layouts.push(sketch.layout_summary(table, None)),
             Self::AtomicSketch(sketch) => layouts.push(sketch.layout_summary(table, None)),
+            Self::AtomicPackedSketch(sketch) => layouts.push(sketch.layout_summary(table, None)),
             Self::PrefilteredSketch {
                 prefilter,
                 limit,
@@ -446,6 +451,11 @@ type AnalysisPair = (SequenceRecord, Option<SequenceRecord>, Option<f64>);
 type NormalizationInput = (usize, SequenceRecord, Option<SequenceRecord>, f64);
 type SparseHist = FxHashMap<usize, u64>;
 type SparseReadDepthHist = FxHashMap<usize, (u64, u64)>;
+
+struct InputHistSinks<'a> {
+    depth: Option<&'a mut SparseHist>,
+    read: Option<&'a mut SparseReadDepthHist>,
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UniqueKmerEstimateSplit {
@@ -2155,9 +2165,16 @@ fn run_single_pass(config: &Config) -> Result<RunSummary> {
 
     let wants_input_hist = config.hist_in.is_some() || config.peaks_in.is_some();
     let wants_input_rhist = config.rhist_in.is_some();
+    let fuse_input_hist_with_normalize =
+        (wants_input_hist || wants_input_rhist) && !config.trim_after_marking;
     let mut input_rhist_written_with_hist = false;
     let started = Instant::now();
-    if wants_input_hist && wants_input_rhist {
+    let mut fused_input_hist = fuse_input_hist_with_normalize.then(SparseHist::default);
+    let mut fused_input_read_hist =
+        fuse_input_hist_with_normalize.then(SparseReadDepthHist::default);
+    if fuse_input_hist_with_normalize {
+        input_rhist_written_with_hist = wants_input_rhist;
+    } else if wants_input_hist && wants_input_rhist {
         let (hist, read_hist) =
             collect_primary_sparse_hist_and_read_hist(config, &input_counts, None, random_seed)?;
         if let Some(path) = &config.hist_in {
@@ -2217,8 +2234,25 @@ fn run_single_pass(config: &Config) -> Result<RunSummary> {
         output_cardinality.as_mut(),
         &cardinality_config,
         random_seed,
+        InputHistSinks {
+            depth: fused_input_hist.as_mut(),
+            read: fused_input_read_hist.as_mut(),
+        },
     )?;
     record_stage_timing(&mut stage_timings, "normalize", started);
+
+    if let Some(hist) = fused_input_hist.as_ref() {
+        if let Some(path) = &config.hist_in {
+            write_sparse_depth_hist(path, hist, config.hist_len, config)?;
+        }
+        if let Some(path) = &config.peaks_in {
+            let dense_hist = sparse_hist_to_peak_dense(hist, config.hist_len);
+            write_peaks(path, &dense_hist, config)?;
+        }
+    }
+    if let (Some(path), Some(read_hist)) = (&config.rhist_in, fused_input_read_hist.as_ref()) {
+        write_sparse_read_depth_hist(path, read_hist, config.hist_len, config)?;
+    }
 
     let started = Instant::now();
     (summary.unique_kmers_in, summary.unique_kmers_in_split) = input_counts.unique_kmer_estimate();
@@ -3828,6 +3862,16 @@ fn build_sketch_input_counts(
         record_stage_timing(stage_timings, "input_main_counting", started);
         return Ok(InputCounts::AtomicSketch(sketch));
     }
+    if use_atomic_packed_input_sketch(config) {
+        let started = Instant::now();
+        let sketch = new_atomic_packed_count_min_sketch(config)?;
+        count_primary_atomic_packed_sketch(config, &sketch)?;
+        for extra in &config.extra {
+            count_single_file_atomic_packed_sketch(config, extra, &sketch, None)?;
+        }
+        record_stage_timing(stage_timings, "input_main_counting", started);
+        return Ok(InputCounts::AtomicPackedSketch(sketch));
+    }
     let started = Instant::now();
     let mut sketch = new_bounded_count_min_sketch(config)?;
     if gpu_counting_supported(config) {
@@ -4037,6 +4081,13 @@ fn use_atomic_count_min_sketch(config: &Config) -> bool {
     config.count_min.bits.unwrap_or(32) == 32
 }
 
+fn use_atomic_packed_input_sketch(config: &Config) -> bool {
+    !config.deterministic
+        && config.count_min.bits.unwrap_or(32) < 32
+        && !use_prefilter_collision_estimates(config)
+        && !gpu_counting_supported(config)
+}
+
 fn new_atomic_count_min_sketch(config: &Config) -> Result<AtomicCountMinSketch> {
     new_atomic_count_min_sketch_with_mask_seed(config, BBTOOLS_KCOUNT_ARRAY_FIRST_MASK_SEED)
 }
@@ -4071,6 +4122,42 @@ fn new_atomic_count_min_sketch_with_mask_seed(
         mask_seed,
     )
     .map(|sketch| sketch.with_parallel_replay(!config.deterministic))
+}
+
+fn new_atomic_packed_count_min_sketch(config: &Config) -> Result<AtomicPackedCountMinSketch> {
+    new_atomic_packed_count_min_sketch_with_mask_seed(config, BBTOOLS_KCOUNT_ARRAY_FIRST_MASK_SEED)
+}
+
+fn new_atomic_packed_count_min_sketch_with_mask_seed(
+    config: &Config,
+    mask_seed: u64,
+) -> Result<AtomicPackedCountMinSketch> {
+    let bits = config.count_min.bits.unwrap_or(32);
+    let hashes = config
+        .count_min
+        .hashes
+        .unwrap_or(BBTOOLS_KCOUNT_ARRAY_MIN_ARRAYS);
+    let total_cells = main_count_min_total_cells(config, bits);
+    ensure_count_min_budget_fits_memory(
+        "count-min sketch",
+        total_cells,
+        bits,
+        config
+            .count_min
+            .memory_bytes
+            .or(config.auto_count_min_memory_bytes),
+    )?;
+    let min_arrays = hashes.max(BBTOOLS_KCOUNT_ARRAY_MIN_ARRAYS);
+    let cells =
+        count_min_table_cells_from_total_bits_with_min_arrays(total_cells, bits, min_arrays);
+    AtomicPackedCountMinSketch::new_with_min_arrays_and_update_mode(
+        cells,
+        hashes,
+        bits,
+        min_arrays,
+        count_min_update_mode(config, bits, hashes),
+        mask_seed,
+    )
 }
 
 fn new_bounded_count_min_sketch(config: &Config) -> Result<PackedCountMinSketch> {
@@ -7049,6 +7136,7 @@ fn normalize_primary(
     mut output_cardinality: Option<&mut KmerCardinalityEstimator>,
     cardinality_config: &Config,
     random_seed: u64,
+    mut input_hist: InputHistSinks<'_>,
 ) -> Result<RunSummary> {
     let mut readers = PrimaryReaders::open(config, config.max_reads)?;
     let format1 = readers.format1();
@@ -7070,6 +7158,7 @@ fn normalize_primary(
                 cardinality_config,
                 &mut summary,
                 &pairs,
+                &mut input_hist,
             )?;
             chunk.clear();
         }
@@ -7084,6 +7173,7 @@ fn normalize_primary(
             cardinality_config,
             &mut summary,
             &pairs,
+            &mut input_hist,
         )?;
     }
 
@@ -7131,6 +7221,7 @@ fn normalize_pair_chunk(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_normalized_pairs(
     config: &Config,
     writers: &mut OptionalWriters,
@@ -7139,11 +7230,36 @@ fn write_normalized_pairs(
     cardinality_config: &Config,
     summary: &mut RunSummary,
     pairs: &[NormalizedPair],
+    input_hist: &mut InputHistSinks<'_>,
 ) -> Result<()> {
     for pair in pairs {
         writers.sync_to_input_list_index(config, pair.input_list_index)?;
         summary.reads_in += pair.read_count;
         summary.bases_in += pair.base_count;
+
+        if let Some(hist) = input_hist.depth.as_deref_mut() {
+            increment_sparse_hist_from_analysis(
+                hist,
+                &pair.decision.analysis.read1,
+                config.hist_len,
+            );
+            if let Some(read2) = &pair.decision.analysis.read2 {
+                increment_sparse_hist_from_analysis(hist, read2, config.hist_len);
+            }
+        }
+        if let Some(read_hist) = input_hist.read.as_deref_mut() {
+            increment_sparse_read_hist(
+                read_hist,
+                &pair.decision.analysis.read1,
+                pair.r1.len(),
+                config.hist_len,
+            );
+            if let (Some(read2_analysis), Some(read2)) =
+                (&pair.decision.analysis.read2, pair.r2.as_ref())
+            {
+                increment_sparse_read_hist(read_hist, read2_analysis, read2.len(), config.hist_len);
+            }
+        }
 
         if pair.decision.toss {
             summary.reads_tossed += pair.read_count;
@@ -12818,6 +12934,10 @@ mod tests {
 
         match counts {
             InputCounts::AtomicSketch(sketch) => {
+                assert!(sketch.cells > 0);
+                assert!(sketch.increments.load(Ordering::Relaxed) > 0);
+            }
+            InputCounts::AtomicPackedSketch(sketch) => {
                 assert!(sketch.cells > 0);
                 assert!(sketch.increments.load(Ordering::Relaxed) > 0);
             }
