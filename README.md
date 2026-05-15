@@ -134,8 +134,10 @@ Java/Rust histogram drift, and aggregate p10/median/p90 summaries. See
 [`docs/trustworthy_benchmarking.md`](docs/trustworthy_benchmarking.md) for the
 Java-default and packed 16-bit benchmark lanes.
 
-The `v0.1.2` performance patch improves deterministic packed bounded counting
-on the local 500k paired-human packed 16-bit lane. A final 3-repeat refresh at
+The `v0.1.3` performance patch adds the high-throughput bounded approximate
+fast lane above. The `v0.1.2` performance patch improved deterministic packed
+bounded counting on the local 500k paired-human packed 16-bit lane. A final
+3-repeat refresh at
 `tmp/trustworthy_baseline_500k_bits16_final_20260508` measured the current
 deterministic Rust median at 19.786s wall time, 14.726s input counting, and
 3.04 GiB RSS; the Java median for the same lane was 8.387s wall time and
