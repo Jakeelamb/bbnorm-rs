@@ -38,6 +38,13 @@ pub fn unfiltered_kmer_windows_for_record(
     unfiltered_kmer_windows(&record.bases, config.k, bbnorm_count_canonical(config))
 }
 
+pub fn for_each_unfiltered_kmer_window_for_record<F>(record: &SequenceRecord, config: &Config, f: F)
+where
+    F: FnMut(Option<KmerKey>),
+{
+    for_each_unfiltered_kmer_window(&record.bases, config.k, bbnorm_count_canonical(config), f);
+}
+
 fn bbnorm_count_canonical(config: &Config) -> bool {
     config.canonical || config.k <= 31
 }
@@ -142,14 +149,26 @@ pub fn for_each_kmer<F>(
 }
 
 pub fn unfiltered_kmer_windows(bases: &[u8], k: usize, canonical: bool) -> Vec<Option<KmerKey>> {
+    let mut out = Vec::new();
+    if k > 0 && bases.len() >= k {
+        out.reserve(bases.len() - k + 1);
+    }
+    for_each_unfiltered_kmer_window(bases, k, canonical, |kmer| out.push(kmer));
+    out
+}
+
+fn for_each_unfiltered_kmer_window<F>(bases: &[u8], k: usize, canonical: bool, mut f: F)
+where
+    F: FnMut(Option<KmerKey>),
+{
     if k == 0 || bases.len() < k {
-        return Vec::new();
+        return;
     }
     if k > 31 {
-        return unfiltered_long_kmer_windows(bases, k, canonical);
+        for_each_unfiltered_long_kmer_window(bases, k, canonical, f);
+        return;
     }
 
-    let mut out = Vec::with_capacity(bases.len() - k + 1);
     let mask = short_kmer_mask(k);
     let shift2 = 2 * (k - 1);
     let mut forward = 0u64;
@@ -168,7 +187,7 @@ pub fn unfiltered_kmer_windows(bases: &[u8], k: usize, canonical: bool) -> Vec<O
         if index + 1 < k {
             continue;
         }
-        out.push((len >= k).then(|| {
+        f((len >= k).then(|| {
             let code = if canonical {
                 forward.max(reverse)
             } else {
@@ -177,7 +196,6 @@ pub fn unfiltered_kmer_windows(bases: &[u8], k: usize, canonical: bool) -> Vec<O
             KmerKey::Short(code)
         }));
     }
-    out
 }
 
 fn for_each_long_kmer<F>(
@@ -240,8 +258,10 @@ fn for_each_long_kmer<F>(
     }
 }
 
-fn unfiltered_long_kmer_windows(bases: &[u8], k: usize, _canonical: bool) -> Vec<Option<KmerKey>> {
-    let mut out = Vec::with_capacity(bases.len() - k + 1);
+fn for_each_unfiltered_long_kmer_window<F>(bases: &[u8], k: usize, _canonical: bool, mut f: F)
+where
+    F: FnMut(Option<KmerKey>),
+{
     let mut roller = LongKmerRoller::new(k);
     let mut len = 0usize;
     for (index, &base) in bases.iter().enumerate() {
@@ -255,9 +275,8 @@ fn unfiltered_long_kmer_windows(bases: &[u8], k: usize, _canonical: bool) -> Vec
         if index + 1 < k {
             continue;
         }
-        out.push((len >= k).then(|| KmerKey::LongHash(roller.xor_key())));
+        f((len >= k).then(|| KmerKey::LongHash(roller.xor_key())));
     }
-    out
 }
 
 struct LongKmerRoller {

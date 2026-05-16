@@ -1,6 +1,7 @@
 use crate::cli::{CARDINALITY_MAX_BUCKETS, Config};
 use crate::kmer::{
-    KmerKey, canonical_short_code, for_each_kmer_for_record, unfiltered_kmer_windows_for_record,
+    KmerKey, canonical_short_code, for_each_kmer_for_record,
+    for_each_unfiltered_kmer_window_for_record, unfiltered_kmer_windows_for_record,
 };
 use crate::peaks::write_peaks;
 use crate::seqio::{
@@ -420,7 +421,6 @@ const COUNTUP_PREPASS_CHUNK_BYTE_LIMIT: usize = 16 * 1024 * 1024;
 const HIST_PARALLEL_CHUNK_SIZE: usize = 1024;
 const NORMALIZE_PARALLEL_CHUNK_SIZE: usize = 1024;
 const PAIRED_ANALYSIS_JOIN_MIN_BASES: usize = 1024;
-const COVERAGE_PAR_SORT_MIN_WINDOWS: usize = 4096;
 const OVERLAP_AUTO_SAMPLE_PAIRS: u64 = 1_000_000;
 const ATOMIC_SKETCH_PAR_REPLAY_MIN_KEYS: usize = 16_384;
 const PACKED_SKETCH_TRACKED_SLOT_LIMIT: usize = 8_000_000;
@@ -2392,6 +2392,7 @@ fn run_countup(config: &Config) -> Result<RunSummary> {
         .then(|| KmerCardinalityEstimator::from_config(config));
     let adjusted_target = ((config.target_depth as f64) * 0.95).round().max(1.0) as u64;
     let started = Instant::now();
+    let mut keys = Vec::new();
 
     while let Some(CountupWorkPair {
         input_list_index,
@@ -2401,7 +2402,7 @@ fn run_countup(config: &Config) -> Result<RunSummary> {
     }) = work_pairs.next_pair()?
     {
         writers.sync_to_input_list_index(config, input_list_index)?;
-        let keys = unique_pair_kmers(config, &r1, r2.as_ref());
+        fill_unique_pair_kmers(config, &r1, r2.as_ref(), &mut keys);
         let mut decision_plan =
             countup_decision_plan(config, &input_counts, &kept_counts, &keys, adjusted_target);
         if countup_length_toss(config, &r1, r2.as_ref()) {
@@ -8227,6 +8228,25 @@ fn read_coverage_desc(
     counts: &dyn CountLookup,
     record: &SequenceRecord,
 ) -> ReadCoverageDesc {
+    if !config.fix_spikes {
+        let mut coverage = Vec::with_capacity(record_kmer_window_capacity(config.k, record));
+        for_each_unfiltered_kmer_window_for_record(record, config, |window| {
+            coverage.push(match window {
+                Some(kmer) => u64_to_i64_saturating(counts.depth(&kmer)),
+                None => -1,
+            });
+        });
+        let had_kmer_windows = if coverage.is_empty() {
+            record.len() >= config.k
+        } else {
+            true
+        };
+        return ReadCoverageDesc {
+            coverage_desc: coverage,
+            had_kmer_windows,
+        };
+    }
+
     let windows = unfiltered_kmer_windows_for_record(record, config);
     let mut coverage: Vec<i64> = windows
         .iter()
@@ -8244,11 +8264,6 @@ fn read_coverage_desc(
     if config.fix_spikes {
         fix_spikes(&mut coverage, &windows, counts, config.k);
     }
-    if coverage.len() >= COVERAGE_PAR_SORT_MIN_WINDOWS {
-        coverage.par_sort_unstable_by(|a, b| b.cmp(a));
-    } else {
-        coverage.sort_unstable_by(|a, b| b.cmp(a));
-    }
     ReadCoverageDesc {
         coverage_desc: coverage,
         had_kmer_windows: true,
@@ -8257,7 +8272,7 @@ fn read_coverage_desc(
 
 fn analyze_read_from_coverage(
     config: &Config,
-    coverage: Vec<i64>,
+    mut coverage: Vec<i64>,
     had_kmer_windows: bool,
 ) -> ReadAnalysis {
     if coverage.is_empty() {
@@ -8266,25 +8281,22 @@ fn analyze_read_from_coverage(
             ..ReadAnalysis::default()
         };
     }
-    let cov_last = coverage.len() - 1;
-    let high = coverage[percentile_index(cov_last, config.high_percentile)];
-    let low = coverage[percentile_index(cov_last, config.low_percentile)];
-    let true_depth = coverage[percentile_index(cov_last, config.depth_percentile)];
+    let high = percentile_depth_desc(&mut coverage, config.high_percentile);
+    let low = percentile_depth_desc(&mut coverage, config.low_percentile);
+    let true_depth = percentile_depth_desc(&mut coverage, config.depth_percentile);
     let min_true_depth = low;
     let min_depth = u64_to_i64_saturating(config.min_depth)
         .max(high / u64_to_i64_saturating(config.error_detect_ratio));
 
-    let mut above_limit = cov_last as isize;
-    while above_limit >= 0 && coverage[above_limit as usize] < min_depth {
-        above_limit -= 1;
-    }
-
-    let depth_al = if above_limit >= 0
-        && ((above_limit as usize + 1) >= config.min_kmers_over_min_depth
+    let above_limit = partition_depths_at_least(&mut coverage, min_depth);
+    let depth_al = if above_limit > 0
+        && (above_limit >= config.min_kmers_over_min_depth
             || config.min_kmers_over_min_depth > coverage.len())
     {
-        let idx = ((above_limit as f64) * (1.0 - config.depth_percentile)) as usize;
-        non_negative_depth(coverage[idx])
+        non_negative_depth(percentile_depth_desc_in(
+            &mut coverage[..above_limit],
+            config.depth_percentile,
+        ))
     } else {
         None
     };
@@ -8310,28 +8322,56 @@ fn analyze_read_from_coverage(
     }
 }
 
+fn percentile_depth_desc(depths: &mut [i64], percentile: f64) -> i64 {
+    let Some(cov_last) = depths.len().checked_sub(1) else {
+        return 0;
+    };
+    let index = percentile_index(cov_last, percentile);
+    select_depth_desc(depths, index)
+}
+
+fn percentile_depth_desc_in(depths: &mut [i64], percentile: f64) -> i64 {
+    let Some(cov_last) = depths.len().checked_sub(1) else {
+        return 0;
+    };
+    let index = percentile_index(cov_last, percentile);
+    select_depth_desc(depths, index)
+}
+
+fn select_depth_desc(depths: &mut [i64], index: usize) -> i64 {
+    let (_, selected, _) = depths.select_nth_unstable_by(index, |left, right| right.cmp(left));
+    *selected
+}
+
+fn partition_depths_at_least(depths: &mut [i64], min_depth: i64) -> usize {
+    let mut write = 0usize;
+    for read in 0..depths.len() {
+        if depths[read] >= min_depth {
+            depths.swap(write, read);
+            write += 1;
+        }
+    }
+    write
+}
+
 fn low_kmer_count(
-    coverage_desc: &[i64],
+    coverage: &[i64],
     low_thresh: i64,
     high_thresh: i64,
     high_depth: i64,
     error_detect_ratio: i64,
 ) -> usize {
-    if coverage_desc.is_empty() {
+    if coverage.is_empty() {
         return 0;
     }
-    if coverage_desc[0] <= low_thresh {
-        return coverage_desc.len();
+    if high_depth <= low_thresh {
+        return coverage.len();
     }
     if high_depth < high_thresh {
         return 0;
     }
     let limit = low_thresh.min(high_depth / error_detect_ratio.max(1));
-    coverage_desc
-        .iter()
-        .rev()
-        .take_while(|&&depth| depth <= limit)
-        .count()
+    coverage.iter().filter(|&&depth| depth <= limit).count()
 }
 
 fn correct_pair_errors(
@@ -15869,6 +15909,30 @@ mod tests {
             ..PairAnalysis::default()
         };
         assert_eq!(dynamic_depth_limits(&config, &noisy), (35, 35));
+    }
+
+    #[test]
+    fn read_coverage_analysis_matches_descending_percentile_semantics_without_full_sort() {
+        let config = Config {
+            high_percentile: 0.80,
+            low_percentile: 0.20,
+            depth_percentile: 0.50,
+            min_depth: 4,
+            min_kmers_over_min_depth: 1,
+            low_thresh: 3,
+            high_thresh: 8,
+            error_detect_ratio: 2,
+            ..Config::default()
+        };
+
+        let analysis = analyze_read_from_coverage(&config, vec![3, 10, 1, 7, 5], true);
+
+        assert_eq!(analysis.true_depth, Some(5));
+        assert_eq!(analysis.min_true_depth, Some(3));
+        assert_eq!(analysis.depth_al, Some(7));
+        assert_eq!(analysis.low_kmer_count, 2);
+        assert_eq!(analysis.total_kmer_count, 5);
+        assert!(analysis.error);
     }
 
     #[test]
