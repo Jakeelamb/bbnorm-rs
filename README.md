@@ -1,29 +1,59 @@
 # bbnorm-rs
 
-`bbnorm-rs` is a Rust implementation of the practical BBNorm read-depth
-normalization workflow from BBTools. It focuses on local FASTA/FASTQ
-normalization, histogram output, paired/interleaved routing, bounded memory
-counting, and reproducible Java-parity behavior for covered modes.
+`bbnorm-rs` is a Rust implementation of the practical BBTools BBNorm read-depth
+normalization workflow. It is built for local FASTA/FASTQ normalization,
+histogram generation, paired/interleaved routing, bounded-memory k-mer counting,
+and Java-parity testing against the vendored BBTools reference.
 
-This is an early working release, not a complete BBTools replacement. The Git
-repository includes a vendored BBTools snapshot for parity tests; crates.io
-packages intentionally exclude that snapshot to keep the package small.
+This is an early working release. It is not a complete drop-in replacement for
+all BBTools commands or every BBNorm edge case.
 
 ## Install
 
-From crates.io, once published:
-
-```bash
-cargo install bbnorm-rs
-```
-
-From a checkout:
+Install from a checkout:
 
 ```bash
 cargo install --path .
 ```
 
-## Basic Usage
+Use it as a Rust crate from a checkout:
+
+```toml
+bbnorm-rs = { path = "../bbnorm-rs" }
+anyhow = "1"
+```
+
+```rust
+use std::ffi::OsString;
+
+use bbnorm_rs::{parse_args, run};
+
+fn main() -> anyhow::Result<()> {
+    let args = [
+        "bbnorm-rs",
+        "in=reads_R1.fq.gz",
+        "in2=reads_R2.fq.gz",
+        "out=normalized_R1.fq.gz",
+        "out2=normalized_R2.fq.gz",
+        "target=40",
+        "max=80",
+        "min=5",
+        "k=31",
+    ]
+    .map(OsString::from);
+    let config = parse_args(args)?;
+    let summary = run(&config)?;
+    println!("kept {} reads", summary.reads_kept);
+    Ok(())
+}
+```
+
+The library API is still young; the command-line interface is the most stable
+surface.
+
+## Quick Start
+
+Normalize paired FASTQ:
 
 ```bash
 bbnorm-rs in=reads_R1.fq.gz in2=reads_R2.fq.gz \
@@ -31,136 +61,142 @@ bbnorm-rs in=reads_R1.fq.gz in2=reads_R2.fq.gz \
   target=40 max=80 min=5 k=31 threads=8
 ```
 
-Common outputs:
+Write keep/toss streams plus depth outputs:
 
 ```bash
-bbnorm-rs in=reads.fq.gz out=keep.fq.gz outt=toss.fq.gz \
+bbnorm-rs in=reads.fq.gz \
+  out=keep.fq.gz outt=toss.fq.gz \
   hist=depth.tsv rhist=read_depth.tsv peaksout=peaks.tsv
 ```
 
-Supported inputs and outputs include plain and gzip FASTA/FASTQ, single-end,
-paired two-file, explicit interleaved, auto-interleaved, BBTools-style `#`
-paired filename expansion, `null` output sinks, and common BBNorm-style
-`key=value` aliases.
+Run the high-throughput bounded approximate lane:
 
-## Current Status
+```bash
+bbnorm-rs in=reads_R1.fq.gz in2=reads_R2.fq.gz \
+  out=null out2=null outt=null outt2=null \
+  hist=depth.tsv rhist=read_depth.tsv \
+  target=40 max=80 min=5 k=31 bits=16 \
+  autocountmin=t autocountminreads=1 deterministic=f threads=8
+```
 
-Verified locally:
+`deterministic=f` allows nondeterministic atomic packed sketch updates. It is
+fast and memory efficient, but bounded-sketch histogram output is not expected
+to be byte-identical to Java.
 
-- `cargo fmt --all -- --check`
-- `cargo clippy --all-targets --all-features -- -D warnings`
-- `cargo test --all`
+## What Works
 
-Current tests cover 242 library tests, 8 basic integration tests, and 108
-Java-parity tests against the vendored BBTools snapshot.
+- Plain and gzip FASTA/FASTQ input and output.
+- Single-end, paired two-file, explicit interleaved, and auto-interleaved input.
+- BBTools-style `key=value` options and common aliases.
+- `null` output sinks for safe benchmark and filtering runs.
+- Exact and bounded count-min k-mer counting.
+- Short canonical k-mers and BBTools-shaped long-kmer hashes.
+- Depth histograms, read-depth histograms, peak output, and common side outputs.
+- Multipass, count-up, ECC, qtrim, minlen, and routing behavior for tested modes.
+- Repository-only Java parity tests against the vendored BBTools snapshot.
 
-Implemented working areas include:
+Known limits:
 
-- BBNorm-style CLI parsing for common normalization options and aliases.
-- Plain and gzip FASTA/FASTQ I/O.
-- Single-end, paired, and interleaved read routing.
-- Short canonical k-mers and long BBTools-shaped hashed k-mers.
-- Exact and bounded count-min counting paths.
-- Depth histograms, read-depth histograms, and peak output.
-- Deterministic normalization decisions for covered modes.
-- Multipass, count-up, and ECC behavior for tested subsets.
-- Guarded benchmark and parity harnesses in the source repository.
+- Full BBTools sketch, prefilter, and cardinality/loglog collision parity is not
+  complete.
+- ECC and overlap behavior are covered by focused tests, but not every
+  BBMerge/BBNorm edge case.
+- High-throughput bounded approximate mode trades byte-stable collision order
+  for speed.
 
-Known gaps remain:
+See [docs/parity.md](docs/parity.md), [docs/parity_matrix.md](docs/parity_matrix.md),
+and [docs/component_buildout.md](docs/component_buildout.md) for the detailed
+compatibility ledger.
 
-- Full BBTools sketch, prefilter, and cardinality/loglog collision parity is
-  not complete.
-- ECC and overlap behavior is covered by compact and biological stress tests,
-  but not every BBMerge/BBNorm edge case.
-- Large human-read benchmarks show improved deterministic bounded counting and
-  excellent memory usage, but input counting remains the main speed bottleneck
-  in some comparable modes.
+## Benchmarks
 
-See [docs/parity.md](docs/parity.md) and
-[docs/component_buildout.md](docs/component_buildout.md) for the detailed
-ledger. The acceptance matrix in
-[docs/parity_matrix.md](docs/parity_matrix.md) is the current front-door
-workflow for deciding whether a mode is exact parity, bounded approximate
-parity, accepted Rust-over-Java divergence, or still a gap.
+Use [`scripts/benchmark_trustworthy_baseline.py`](scripts/benchmark_trustworthy_baseline.py)
+for repeatable Java/Rust comparisons. It records git state, tool versions,
+input metadata, command lines, raw run data, stage timings, RSS, and histogram
+drift.
 
-## Benchmark Snapshot
+![BBnorm benchmark: Java vs Rust](docs/assets/java_vs_rust_large_wall_time.svg)
 
-The acceptance matrix is the publishable benchmark source of truth. The latest
-local matrix run at
-`tmp/parity_acceptance_publish_ready_20260508/acceptance_summary.tsv` verified
-9 bundled phiX exact-output modes and 6 local human bounded-sketch modes.
+### Local 500k Paired-Human Lane
 
-Exact bundled rows:
+Three-repeat median, paired human slice, `bits=16`, `threads=8`, null read
+outputs, `hist` and `rhist` enabled:
 
-- `default`, `k=40`, `k=40 fixspikes=t`
-- `passes=2`
-- `keepall=t`
-- `ecc=t markuncorrectableerrors=t`
-- `qtrim=r trimq=10`
-- `minlen=100`
-- `passes=2 ecc=t markuncorrectableerrors=t`
+| Tool | Wall time | Peak RSS |
+| --- | ---: | ---: |
+| Java BBNorm | 7.814 s | 3.39 GiB |
+| bbnorm-rs fast lane | 6.769 s | 2.79 GiB |
 
-Local human bounded-sketch rows:
+Result: Rust was 13.4% faster and used 17.8% less peak RSS on this lane.
 
-| Row | Mode | Verdict | Java time | Rust time | Java RSS | Rust RSS | Hist drift ppm | Rhist drift ppm |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 50k | default | bounded_drift | 1.54s | 2.57s | 3.35 GiB | 3.30 GiB | 4 | 840 |
-| 50k | prefilter | bounded_drift | 2.05s | 2.68s | 3.35 GiB | 3.10 GiB | 4 | 840 |
-| 50k | k40_fixspikes | bounded_drift | 1.64s | 2.47s | 3.34 GiB | 3.12 GiB | 2 | 140 |
-| 500k | default | bounded_drift | 9.03s | 30.12s | 3.38 GiB | 3.38 GiB | 1227 | 1492 |
-| 500k | prefilter | bounded_drift | 10.53s | 31.81s | 3.26 GiB | 3.14 GiB | 49 | 998 |
-| 500k | k40_fixspikes | bounded_drift | 10.82s | 28.60s | 3.39 GiB | 3.25 GiB | 245 | 982 |
+Artifact:
+`tmp/fastlane_atomic_packed_fusedhist_500k_compare_20260515_115057`
 
-The conservative publishable claim is: exact covered fixture modes match the
-vendored Java oracle byte-for-byte, bounded human rows stay within the matrix
-drift gate, and large-slice Rust speed still needs work in the input-counting
-hot path. `countup=t` is tracked separately as an accepted Rust-over-Java
-divergence guard rather than normal Java parity.
+### Large Local Stress Sweep
 
-For high-throughput bounded approximate runs where byte-stable collision order
-is less important than speed, `deterministic=f` enables direct atomic packed
-sketch updates and fuses input histogram collection into the normalization pass.
-On the local 500k paired-human packed 16-bit lane at
-`tmp/fastlane_atomic_packed_fusedhist_500k_compare_20260515_115057`, the
-3-repeat median was 6.769s / 2.79 GiB RSS for Rust versus 7.814s / 3.39 GiB
-RSS for Java. That is 13.4% faster wall time and 17.8% lower peak RSS on the
-same input, read limits, `bits=16`, null read outputs, `hist`, and `rhist`
-benchmark lane.
+One long repeat per point, using a gzip-concatenated repeated real human 500k
+slice to scale up to 50M paired reads:
 
-For repeatable current baselines, use
-[`scripts/benchmark_trustworthy_baseline.py`](scripts/benchmark_trustworthy_baseline.py).
-It records git/tool/input metadata, command lines, raw run data, stage timings,
-Java/Rust histogram drift, and aggregate p10/median/p90 summaries. See
-[`docs/trustworthy_benchmarking.md`](docs/trustworthy_benchmarking.md) for the
-Java-default and packed 16-bit benchmark lanes.
+| Read pairs | Java time | Rust time | Speedup | Rust RSS |
+| ---: | ---: | ---: | ---: | ---: |
+| 1M | 16.9 s | 13.6 s | 1.24x | 2.79 GiB |
+| 5M | 1.27 m | 1.12 m | 1.13x | 2.79 GiB |
+| 10M | 2.33 m | 2.22 m | 1.05x | 2.79 GiB |
+| 25M | 5.65 m | 5.38 m | 1.05x | 2.79 GiB |
+| 50M | 13.08 m | 12.48 m | 1.05x | 2.79 GiB |
 
-The `v0.1.3` performance patch adds the high-throughput bounded approximate
-fast lane above. The `v0.1.2` performance patch improved deterministic packed
-bounded counting on the local 500k paired-human packed 16-bit lane. A final
-3-repeat refresh at
-`tmp/trustworthy_baseline_500k_bits16_final_20260508` measured the current
-deterministic Rust median at 19.786s wall time, 14.726s input counting, and
-3.04 GiB RSS; the Java median for the same lane was 8.387s wall time and
-3.41 GiB RSS.
+At 50M paired reads, Rust completed in 12.48 minutes versus Java at 13.08
+minutes, with 16.8% lower peak RSS. This is a performance stress benchmark, not
+a unique 50M-read biological dataset.
 
-| Variant | Before | After | Change |
-| --- | ---: | ---: | ---: |
-| Rust deterministic wall time | 24.104s | 19.786s | 17.9% faster |
-| Rust deterministic input counting | 19.038s | 14.726s | 22.7% faster |
-| Rust deterministic max RSS | 3.41 GiB | 3.04 GiB | 10.9% lower |
+Artifact:
+`tmp/scaling_fastlane_large_20260515_121613`
 
-Those measurements compare `tmp/trustworthy_baseline_500k_bits16_20260508`
-against `tmp/trustworthy_baseline_500k_bits16_final_20260508`, with 3 repeats
-per variant, null read outputs, `bits=16`, `reads=500000`, and
-`tablereads=500000`.
+## Correctness Claims
 
-Experimental GPU counting is documented in
-[`docs/gpu_counting_integration.md`](docs/gpu_counting_integration.md). The
-parity-safe GPU path must preserve deterministic chunk replay order; naive
-global GPU reduction is faster-looking but semantically wrong for conservative
-count-min updates. The current persistent CUDA helper is byte-identical to Rust
-CPU on the tested lanes but remains slower than the CPU path, so it is kept
-behind explicit `gpucounting=t gpupersistent=t` flags.
+The repository test suite includes Java-parity integration tests for covered
+modes. Exact covered fixture modes are expected to match the vendored Java
+oracle byte-for-byte.
+
+The high-throughput `deterministic=f` bounded approximate lane is different:
+it is designed for speed and bounded memory, not byte-identical collision order.
+Report histogram drift for that lane instead of claiming identical k-mer output.
+
+## GPU Status
+
+Experimental CUDA helpers live under `scripts/` and are documented in
+[docs/gpu_counting_integration.md](docs/gpu_counting_integration.md).
+
+Build the helpers with:
+
+```bash
+scripts/build_cuda_kmer_reduce_runs.sh
+```
+
+The current GPU integration is useful as a research lane, but it should not be
+the headline performance path yet. The parity-safe persistent helper preserves
+chunk replay semantics, but previous measurements were slower than the CPU path
+because of host/device copies, pipe serialization, and replay overhead.
+
+It is worth benchmarking the GPU hybrid path again only if the experiment is
+kept separate from the published CPU fast-lane claim, ideally with:
+
+- a small smoke run to prove the helper still works,
+- a 500k comparison against the current `deterministic=f bits=16` CPU fast lane,
+- and a larger 5M or 10M run only if the 500k result is promising.
+
+## Development Checks
+
+Before making performance claims:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all
+```
+
+This repository keeps the vendored BBTools snapshot and Java parity tests local
+to the GitHub source tree.
 
 ## Repository Layout
 
@@ -168,13 +204,12 @@ behind explicit `gpucounting=t gpupersistent=t` flags.
 - `tests/basic.rs`: package-friendly integration tests.
 - `tests/java_parity.rs`: repository-only Java parity tests requiring
   `vendor/BBTools-master`.
-- `docs/`: implementation status and parity notes.
-- `scripts/`: local parity, benchmark, and stress harnesses.
+- `docs/`: parity, benchmark, performance, and GPU notes.
+- `scripts/`: benchmark, parity, stress, and CUDA helper scripts.
 - `vendor/`: BBTools reference snapshot for repository testing only.
 
 ## License
 
 `bbnorm-rs` is licensed under the BSD 3-Clause License. The vendored BBTools
-reference snapshot in the source repository is distributed under its own license
-at `vendor/BBTools-master/license.txt` and is not included in crates.io
-packages.
+reference snapshot in the source repository is distributed under its own
+license at `vendor/BBTools-master/license.txt`.

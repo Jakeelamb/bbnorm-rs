@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1100" viewBox="0 0 1800 1100">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="900.0" y="58" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="44" font-weight="800" fill="#111827">BBnorm benchmark: Java vs Rust</text>
+<text x="900.0" y="96" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="22" fill="#4b5563">Paired human reads, bits=16, hist/rhist enabled, null FASTQ outputs. One long repeat per point.</text>
+<text x="900.0" y="1065" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="22" fill="#4b5563">Read pairs processed (log scale)</text>
+<text x="35" y="535.0" text-anchor="middle" transform="rotate(-90 35 535.0)" font-family="Inter, Arial, sans-serif" font-size="22" fill="#4b5563">Elapsed wall time</text>
+<line x1="140" y1="950.0" x2="1710" y2="950.0" stroke="#e5e7eb" stroke-width="1.2"/>
+<text x="122" y="957.0" text-anchor="end" font-family="Inter, Arial, sans-serif" font-size="18" fill="#4b5563">0s</text>
+<line x1="140" y1="811.7" x2="1710" y2="811.7" stroke="#e5e7eb" stroke-width="1.2"/>
+<text x="122" y="818.7" text-anchor="end" font-family="Inter, Arial, sans-serif" font-size="18" fill="#4b5563">2.8m</text>
+<line x1="140" y1="673.3" x2="1710" y2="673.3" stroke="#e5e7eb" stroke-width="1.2"/>
+<text x="122" y="680.3" text-anchor="end" font-family="Inter, Arial, sans-serif" font-size="18" fill="#4b5563">5.6m</text>
+<line x1="140" y1="535.0" x2="1710" y2="535.0" stroke="#e5e7eb" stroke-width="1.2"/>
+<text x="122" y="542.0" text-anchor="end" font-family="Inter, Arial, sans-serif" font-size="18" fill="#4b5563">8.3m</text>
+<line x1="140" y1="396.7" x2="1710" y2="396.7" stroke="#e5e7eb" stroke-width="1.2"/>
+<text x="122" y="403.7" text-anchor="end" font-family="Inter, Arial, sans-serif" font-size="18" fill="#4b5563">11m</text>
+<line x1="140" y1="258.3" x2="1710" y2="258.3" stroke="#e5e7eb" stroke-width="1.2"/>
+<text x="122" y="265.3" text-anchor="end" font-family="Inter, Arial, sans-serif" font-size="18" fill="#4b5563">14m</text>
+<line x1="140" y1="120.0" x2="1710" y2="120.0" stroke="#e5e7eb" stroke-width="1.2"/>
+<text x="122" y="127.0" text-anchor="end" font-family="Inter, Arial, sans-serif" font-size="18" fill="#4b5563">17m</text>
+<line x1="140.0" y1="120" x2="140.0" y2="950" stroke="#f3f4f6" stroke-width="1.1"/>
+<text x="140.0" y="986" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="19" fill="#4b5563">1M</text>
+<line x1="785.9" y1="120" x2="785.9" y2="950" stroke="#f3f4f6" stroke-width="1.1"/>
+<text x="785.9" y="986" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="19" fill="#4b5563">5M</text>
+<line x1="1064.1" y1="120" x2="1064.1" y2="950" stroke="#f3f4f6" stroke-width="1.1"/>
+<text x="1064.1" y="986" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="19" fill="#4b5563">10M</text>
+<line x1="1431.8" y1="120" x2="1431.8" y2="950" stroke="#f3f4f6" stroke-width="1.1"/>
+<text x="1431.8" y="986" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="19" fill="#4b5563">25M</text>
+<line x1="1710.0" y1="120" x2="1710.0" y2="950" stroke="#f3f4f6" stroke-width="1.1"/>
+<text x="1710.0" y="986" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="19" fill="#4b5563">50M</text>
+<line x1="140" y1="950" x2="1710" y2="950" stroke="#111827" stroke-width="2"/>
+<line x1="140" y1="120" x2="140" y2="950" stroke="#111827" stroke-width="2"/>
+<polyline fill="none" stroke="#2563eb" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" points="140.0,936.0 785.9,887.0 1064.1,833.8 1431.8,668.4 1710.0,298.7"/>
+<circle cx="140.0" cy="936.0" r="8" fill="#2563eb" stroke="#ffffff" stroke-width="3"/>
+<circle cx="785.9" cy="887.0" r="8" fill="#2563eb" stroke="#ffffff" stroke-width="3"/>
+<circle cx="1064.1" cy="833.8" r="8" fill="#2563eb" stroke="#ffffff" stroke-width="3"/>
+<circle cx="1431.8" cy="668.4" r="8" fill="#2563eb" stroke="#ffffff" stroke-width="3"/>
+<circle cx="1710.0" cy="298.7" r="8" fill="#2563eb" stroke="#ffffff" stroke-width="3"/>
+<polyline fill="none" stroke="#dc2626" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" points="140.0,938.7 785.9,894.4 1064.1,839.5 1431.8,681.9 1710.0,328.6"/>
+<circle cx="140.0" cy="938.7" r="8" fill="#dc2626" stroke="#ffffff" stroke-width="3"/>
+<circle cx="785.9" cy="894.4" r="8" fill="#dc2626" stroke="#ffffff" stroke-width="3"/>
+<circle cx="1064.1" cy="839.5" r="8" fill="#dc2626" stroke="#ffffff" stroke-width="3"/>
+<circle cx="1431.8" cy="681.9" r="8" fill="#dc2626" stroke="#ffffff" stroke-width="3"/>
+<circle cx="1710.0" cy="328.6" r="8" fill="#dc2626" stroke="#ffffff" stroke-width="3"/>
+<text x="1698.0" y="270.7" text-anchor="end" font-family="Inter, Arial, sans-serif" font-size="21" font-weight="700" fill="#2563eb">Java: 13.08m</text>
+<text x="1698.0" y="362.6" text-anchor="end" font-family="Inter, Arial, sans-serif" font-size="21" font-weight="700" fill="#dc2626">Rust: 12.48m</text>
+<rect x="82.0" y="913.4" width="116" height="38" rx="6" fill="#ecfdf5" stroke="#a7f3d0"/>
+<text x="140.0" y="939.4" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700" fill="#059669">1.24x</text>
+<rect x="1006.1" y="812.6" width="116" height="38" rx="6" fill="#ecfdf5" stroke="#a7f3d0"/>
+<text x="1064.1" y="838.6" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700" fill="#059669">1.05x</text>
+<rect x="1652.0" y="289.7" width="116" height="38" rx="6" fill="#ecfdf5" stroke="#a7f3d0"/>
+<text x="1710.0" y="315.7" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700" fill="#059669">1.05x</text>
+<rect x="150" y="120" width="360" height="92" rx="8" fill="#ffffff" stroke="#d1d5db"/>
+<line x1="172" y1="148" x2="226" y2="148" stroke="#2563eb" stroke-width="6" stroke-linecap="round"/>
+<circle cx="199" cy="148" r="7" fill="#2563eb" stroke="#fff" stroke-width="2"/>
+<text x="244" y="155" font-family="Inter, Arial, sans-serif" font-size="21" fill="#111827">Java BBNorm</text>
+<line x1="172" y1="186" x2="226" y2="186" stroke="#dc2626" stroke-width="6" stroke-linecap="round"/>
+<circle cx="199" cy="186" r="7" fill="#dc2626" stroke="#fff" stroke-width="2"/>
+<text x="244" y="193" font-family="Inter, Arial, sans-serif" font-size="21" fill="#111827">Rust fast lane</text>
+<rect x="1150" y="155" width="560" height="135" rx="10" fill="#f9fafb" stroke="#d1d5db"/>
+<text x="1178" y="197" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="800" fill="#111827">50M paired reads</text>
+<text x="1178" y="233" font-family="Inter, Arial, sans-serif" font-size="22" fill="#111827">Rust: 12.48m vs Java: 13.08m</text>
+<text x="1178" y="267" font-family="Inter, Arial, sans-serif" font-size="22" fill="#059669">4.6% lower wall time, 16.8% lower RSS</text>
+<text x="140" y="1022" font-family="Inter, Arial, sans-serif" font-size="18" fill="#6b7280">Input: gzip-concatenated repeated real human 500k slice to 50M pairs; fast lane is bounded approximate (`deterministic=f`).</text>
+</svg>
